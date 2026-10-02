@@ -4,6 +4,10 @@ dist/
 dist-ssr/
 *.local
 
+# Vite 缓存与类型检查增量产物（同样只是本地产物，不入库）
+.vite/
+*.tsbuildinfo
+
 # 仓库内便携 Node.js 运行时（由 scripts/install.bat 安装；不入库）
 .tools/
 
