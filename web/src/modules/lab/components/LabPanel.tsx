@@ -7,6 +7,7 @@ import { SaturationPanel } from "./SaturationPanel";
 import { StrokePanel } from "./StrokePanel";
 import { HarmonyPanel } from "./HarmonyPanel";
 import { PalettePanel } from "./PalettePanel";
+import { FalsecolorPanel } from "./FalsecolorPanel";
 import { PanelInfoButton } from "./PanelInfo";
 
 /**
@@ -14,14 +15,9 @@ import { PanelInfoButton } from "./PanelInfo";
  * 本表逐步移除；排版规则见开发文档-M4 §2.3。
  */
 const PANEL_INFO: Record<
-  Exclude<LabTool, "histogram" | "saturation" | "dotgain" | "stroke" | "harmony" | "palette">,
+  Exclude<LabTool, "histogram" | "saturation" | "dotgain" | "stroke" | "harmony" | "palette" | "falsecolor">,
   { name: string; desc: string; plan: string }
 > = {
-  falsecolor: {
-    name: "假彩色",
-    desc: "明度映射色带，曝光结构一眼可读",
-    plan: "任务 M4.6",
-  },
   compare: {
     name: "对比模式",
     desc: "双图左右/上下/滑轨对比（P1）",
@@ -41,6 +37,7 @@ function ToolContent({ tool }: { tool: LabTool }) {
   if (tool === "stroke") return <StrokePanel />;
   if (tool === "harmony") return <HarmonyPanel />;
   if (tool === "palette") return <PalettePanel />;
+  if (tool === "falsecolor") return <FalsecolorPanel />;
   const info = PANEL_INFO[tool];
   return (
     <>

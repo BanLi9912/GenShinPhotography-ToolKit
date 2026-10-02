@@ -1123,3 +1123,37 @@ button.lab-hist__chip:hover {
   flex-shrink: 0;
   margin-top: 3px;
 }
+
+/* ---- 假彩色（任务 M4.6）：色带图例，直方图/预览/chips 全复用既有类 ---- */
+
+.lab-fc__legend {
+  margin: 0 0 var(--space-2);
+}
+
+.lab-fc__legend-grad {
+  height: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+}
+
+.lab-fc__legend-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+/* 取样失败时的自证文案：空框不留白（覆盖在图表区之上，不改变既有布局） */
+.lab-fc__empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--space-3);
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  pointer-events: none;
+}

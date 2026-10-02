@@ -828,6 +828,28 @@ function serveSystemComponents(): Plugin {
     configureServer(server: ViteDevServer) {
       server.middlewares.use((req, res, next) => {
         const pathname = (req.url ?? "").split("?")[0];
+
+        // 轻量健康探测（顶栏「本地服务」指示灯用，2026-10-02）：只证明**本地
+        // dev server / Node 中间件在跑**，不读盘、不缓存、不算组件状态——所以
+        // 独立于 /api/components（那个要读盘、量体积、带 1.5s 微缓存，当心跳太重）。
+        // 语义：200 = 本地服务在线（「在文件夹中打开」「图库注册表」「识图代理」
+        // 「组件安装」可用）；404 = 纯静态构建（无 Node 侧能力）；连不上 = 没跑。
+        if (pathname === "/api/health") {
+          if (req.method !== "GET") {
+            sendJson(res, 405, { ok: false, error: "仅支持 GET" });
+            return;
+          }
+          sendJson(res, 200, {
+            ok: true,
+            app: "yuanshe-toolkit",
+            node: process.version,
+            platform: process.platform,
+            pid: process.pid,
+            at: Date.now(),
+          });
+          return;
+        }
+
         if (pathname !== "/api/components" && pathname !== "/api/components/install") {
           return next();
         }

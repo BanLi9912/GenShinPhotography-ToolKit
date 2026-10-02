@@ -2,6 +2,11 @@ import { NavLink } from "react-router-dom";
 import { MODULES } from "../modules";
 import { useThemeStore } from "../theme";
 import { useSettingsStore } from "../settings/store";
+import {
+  serviceLabel,
+  serviceTitle,
+  useServiceHealth,
+} from "../serviceHealth";
 import "./TopBar.css";
 
 /** 太阳图标（深色主题下显示，点击切换到浅色） */
@@ -75,6 +80,7 @@ export function TopBar() {
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
   const openSettings = useSettingsStore((s) => s.openSettings);
+  const health = useServiceHealth();
   const nextThemeLabel =
     theme === "dark" ? "切换到浅色主题" : "切换到深色主题";
 
@@ -98,9 +104,13 @@ export function TopBar() {
         </nav>
       </div>
       <div className="topbar__group">
-        <span className="topbar__service" title="本地分析服务（待 Phase 2 接入）">
+        <span
+          className={`topbar__service is-${health.state}`}
+          title={serviceTitle(health)}
+          data-service-state={health.state}
+        >
           <span className="topbar__service-dot" aria-hidden="true" />
-          本地服务 · 未连接
+          {serviceLabel(health.state)}
         </span>
         <button
           type="button"

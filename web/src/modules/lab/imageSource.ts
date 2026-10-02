@@ -7,6 +7,7 @@ import { rgbToHsl, luma } from "../../core/imaging/color";
 import { useLabStore } from "./store";
 import type { OverlayTool } from "./store";
 import { buildDotGainLut } from "./dotgain";
+import { buildFalseColorLut } from "./falsecolor";
 import { applySaturationCheck, applySaturationHeat } from "./saturation";
 
 /** 当前图像的离屏像素源（readPixel / readLuma 经此取数；始终为原图，不受预览影响） */
@@ -233,6 +234,15 @@ export async function getOverlayImageUrl(tool: OverlayTool): Promise<string | nu
   } else if (tool === "sat-heat") {
     dst.set(src);
     applySaturationHeat(dst);
+  } else if (tool === "falsecolor") {
+    const lut = buildFalseColorLut();
+    for (let i = 0; i < src.length; i += 4) {
+      const li = Math.min(255, Math.round(luma(src[i], src[i + 1], src[i + 2])));
+      dst[i] = lut[li * 3];
+      dst[i + 1] = lut[li * 3 + 1];
+      dst[i + 2] = lut[li * 3 + 2];
+      dst[i + 3] = src[i + 3];
+    }
   } else {
     return null;
   }
@@ -378,6 +388,8 @@ export function openSampleImage(): void {
 export function getSampledImageData(maxEdge = 2048): ImageData | null {
   if (!pixelCtx) return null;
   const { width, height } = pixelSize;
+  // 像素源尺寸为 0（异常/失效来源）时直接判空：getImageData 会抛 IndexSizeError
+  if (width <= 0 || height <= 0) return null;
   if (width <= maxEdge && height <= maxEdge) {
     return pixelCtx.getImageData(0, 0, width, height);
   }
