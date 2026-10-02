@@ -1,0 +1,23 @@
+# 依赖与构建产物
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# 仓库内便携 Node.js 运行时（由 scripts/install.bat 安装；不入库）
+.tools/
+
+# 日志与本地开发数据
+logs/
+*.log
+devdata/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 编辑器与操作系统
+.obsidian/
+.idea/
+.DS_Store
+Thumbs.db

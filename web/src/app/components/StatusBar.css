@@ -1,0 +1,30 @@
+.statusbar {
+  grid-area: statusbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--statusbar-h);
+  padding: 0 var(--space-4);
+  background: var(--bg-panel);
+  border-top: 1px solid var(--line);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  font-size: var(--text-xs);
+  color: var(--text-readout); /* 数值读数位（design.md §3.3 三色纪律：橙） */
+  user-select: none;
+  transition:
+    background-color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.statusbar__group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.statusbar__value {
+  margin-left: var(--space-1);
+  font-family: var(--font-mono);
+  color: var(--text-2);
+}

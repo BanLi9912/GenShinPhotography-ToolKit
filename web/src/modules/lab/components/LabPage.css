@@ -1,0 +1,1125 @@
+/* M4 图像分析实验室：视口全宽（开发文档-M4 §2.1；左侧工具栏为壳级悬浮岛，输出区为悬浮浮层） */
+
+.lab-page {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-app);
+  user-select: none;
+  transition: background-color var(--motion-base);
+}
+
+/* ---- 图像视口（全宽） ---- */
+
+.lab-viewport {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.lab-viewport.has-image {
+  cursor: grab;
+}
+
+.lab-viewport.is-panning {
+  cursor: grabbing;
+}
+
+.lab-viewport.is-picking {
+  cursor: crosshair;
+}
+
+.lab-viewport__img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  max-width: none;
+  pointer-events: none;
+}
+
+/* 视口控制钮（适配 / 1:1）：浮于视口右下角，随面板宽度避让 */
+.lab-viewport__controls {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  z-index: 2;
+  transition:
+    right var(--motion-base),
+    bottom 150ms ease-out,
+    background-color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+/* 拖拽调宽期间即时跟随（right 过渡只在收起/展开时生效） */
+.lab-viewport__controls.is-resizing {
+  transition-property: background-color, border-color;
+}
+
+.lab-viewport__ctrl {
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.lab-viewport__ctrl:hover {
+  color: var(--text-1);
+  background: var(--accent-weak);
+}
+
+.lab-viewport__ctrl--text {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-readout);
+}
+
+/* ---- 空状态引导卡 ---- */
+
+.lab-empty {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: var(--space-6);
+}
+
+.lab-empty__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 360px;
+  padding: var(--space-8);
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  text-align: center;
+  transition:
+    background-color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.lab-empty__title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  color: var(--text-title);
+}
+
+.lab-empty__hint {
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+
+.lab-empty__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+  margin-top: var(--space-2);
+}
+
+.lab-empty__btn {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--text-1);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast),
+    border-color var(--motion-fast);
+}
+
+.lab-empty__btn:hover:not(:disabled) {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+}
+
+.lab-empty__btn--primary {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.lab-empty__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.lab-empty__drop {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+/* ---- 输出区（悬浮于视口之上的圆角浮层，观感向工具栏岛看齐） ---- */
+
+.lab-output {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  /* 多层背景：极淡光晕叠加在玻璃底上，模拟光线穿过磨砂玻璃的折射（Kinetic 蓝/橙） */
+  background:
+    radial-gradient(ellipse at 85% 15%, rgb(77 163 255 / 5%) 0%, transparent 55%),
+    radial-gradient(ellipse at 15% 90%, rgb(255 138 31 / 4%) 0%, transparent 50%),
+    var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl); /* 大浮层 24px 连续圆角（visionOS 窗口） */
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  overflow-y: auto;
+  z-index: 2;
+  transition:
+    transform var(--motion-fast),
+    opacity var(--motion-fast),
+    bottom 150ms ease-out;
+}
+
+.lab-output.is-collapsed {
+  transform: translateX(calc(100% + 12px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 面板滚动切换动画：方向由切换前后工具在左栏的相对位置决定（key 重挂载驱动） */
+.lab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+
+/* 翻页式切换：is-switching 期间新旧两页共存，整页平移衔接（方向由 toolDir 决定） */
+.lab-output.is-switching {
+  overflow: hidden;
+}
+
+.lab-output.is-switching .lab-panel {
+  position: absolute;
+  inset: 0;
+  overflow: hidden; /* 高内容翻页瞬间裁齐，动画结束恢复滚动 */
+}
+
+.lab-panel--exit-up { animation: lab-page-out-up 250ms ease-out forwards; pointer-events: none; }
+.lab-panel--exit-down { animation: lab-page-out-down 250ms ease-out forwards; pointer-events: none; }
+.lab-panel--enter-up { animation: lab-page-in-up 250ms ease-out backwards; }
+.lab-panel--enter-down { animation: lab-page-in-down 250ms ease-out backwards; }
+
+@keyframes lab-page-out-up { from { transform: translateY(0); } to { transform: translateY(-100%); } }
+@keyframes lab-page-out-down { from { transform: translateY(0); } to { transform: translateY(100%); } }
+@keyframes lab-page-in-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes lab-page-in-down { from { transform: translateY(-100%); } to { transform: translateY(0); } }
+
+.lab-panel__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line); /* visionOS 标题区贯通分隔线 */
+}
+
+.lab-panel__name {
+  flex: 1;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: var(--text-xl);
+  color: var(--text-title);
+}
+
+/* 卡片去底去边（design.md §2/§8：禁卡片套卡片，分隔靠留白与 1px 细线） */
+.lab-panel__card {
+  padding: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-3);
+}
+
+/* ---- 面板手柄（dock 层，浮于视口之上，滑出不带走） ---- */
+
+.lab-dock {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* 感应区：面板左缘 48px×160px，hover / resizing 时显出手柄 */
+.lab-dock__zone {
+  position: absolute;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 160px;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.lab-dock__handle {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-2);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  transform: translateY(-50%);
+  opacity: 0;
+  transition:
+    opacity var(--motion-fast),
+    color var(--motion-fast),
+    background-color var(--motion-base);
+}
+
+.lab-dock__zone:hover .lab-dock__handle,
+.lab-dock__zone.is-resizing .lab-dock__handle {
+  opacity: 1;
+}
+
+.lab-dock__handle:hover {
+  color: var(--text-1);
+}
+
+/* ---- ⓘ 说明按钮与浮层 ---- */
+
+.lab-info {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.lab-info__btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--text-2);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.lab-info__btn:hover {
+  color: var(--text-1);
+  background: var(--accent-weak);
+}
+
+.lab-info__popover {
+  position: fixed;            /* portal 到 body，脱离 .lab-output 的 backdrop root */
+  /* top / right / maxHeight 由 PanelInfo.tsx inline style 注入 */
+  z-index: 40;                /* body 级，压过工具岛(z 20)与拖入层(z 30) */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 340px;
+  padding: var(--space-4);
+  overflow-y: auto;           /* 说明行多时在弹窗内部纵向滚动 */
+  overscroll-behavior: contain;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg); /* 面板同款大圆角 */
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);           /* 与分析面板/工具岛同一磨砂口径 */
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--text-2);
+  animation: lab-info-in var(--motion-fast) ease-out;
+}
+
+@keyframes lab-info-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- 直方图面板 ---- */
+
+.lab-hist__tabs {
+  display: flex;
+  gap: 0;
+  width: max-content; /* 收缩为内容宽，去右侧空槽 */
+  border-radius: 999px;
+  background: var(--bg-glass-soft);
+  padding: 2px;
+  overflow: hidden;
+}
+
+.lab-hist__row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-3);
+}
+
+.lab-hist__segs {
+  display: flex;
+  gap: 0;
+  border-radius: 999px;
+  background: var(--bg-glass-soft);
+  padding: 2px;
+  overflow: hidden;
+}
+
+.lab-hist__seg {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px; /* 点击目标 ≥24px（design.md §7.6） */
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  background: transparent;
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.lab-hist__seg:hover {
+  background: var(--accent-weak);
+}
+
+.lab-hist__seg.is-active {
+  color: var(--on-accent);
+  background: var(--accent); /* visionOS 实心选中态 */
+}
+
+.lab-hist__canvas-wrap {
+  position: relative; /* 光标竖线定位锚 */
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  padding: var(--space-2); /* 图表与容器边缘留白，Apple 面板呼吸感 */
+  overflow: hidden; /* 圆角裁齐 canvas 直角 */
+  background: var(--bg-glass-soft); /* 二级材质分层（替代 1px 边） */
+  border-radius: var(--radius-lg);
+  box-shadow: 0 2px 12px rgb(0 0 0 / 14%); /* 提升图表区层次，双主题可辨 */
+}
+
+.lab-hist__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 色阶光标竖线：跟随指针在 L 直方图上的位置（限定绘图区内，不越轴） */
+.lab-hist__cursor-line {
+  position: absolute;
+  top: 16px;   /* AXIS_TOP，不越过纵轴轴题区 */
+  bottom: 36px; /* AXIS_BOTTOM，不越过横轴刻度区 */
+  width: 1px;
+  background: var(--text-1);
+  opacity: 0.45;
+  pointer-events: none;
+  transition: left 60ms ease-out;
+}
+
+/* 读数徽章行：柔性容器，内含独立数据 chip */
+.lab-hist__readout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+}
+
+/* 每条读数独立 chip */
+.lab-hist__chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  background: var(--bg-glass-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition:
+    background-color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+/* chip 内的数值：突出为核心信息 */
+.lab-hist__chip .lab-hist__value {
+  color: var(--text-readout);
+  font-weight: 600;
+}
+
+/* chip 内的圆点指示器 */
+.lab-hist__chip .lab-hist__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-readout);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+/* 分隔符居中 */
+.lab-hist__sep {
+  color: var(--text-3);
+  opacity: 0.4;
+}
+
+/* 死黑/死白 > 1% 警告 chip：红色描边 + 红色圆点 */
+.lab-hist__chip--warn {
+  border-color: var(--danger);
+}
+.lab-hist__chip--warn .lab-hist__dot {
+  background: var(--danger);
+  opacity: 1;
+}
+.lab-hist__chip--warn .lab-hist__value {
+  color: var(--danger);
+}
+
+/* chip 作切换按钮（低/高饱和范围联动） */
+button.lab-hist__chip {
+  cursor: pointer;
+}
+
+button.lab-hist__chip:hover {
+  border-color: var(--accent);
+}
+
+.lab-hist__chip.is-active {
+  border-color: var(--accent);
+}
+
+.lab-hist__chip.is-active .lab-hist__value {
+  color: var(--accent);
+}
+
+/* ---- 饱和度面板：反向预览 ---- */
+
+.lab-sat__preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: calc(var(--space-3) * -1); /* 紧贴上方 tab 栏 */
+  margin-bottom: var(--space-4);
+}
+
+.lab-sat__preview-caption {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.lab-sat__preview-frame {
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-glass-soft);
+}
+
+.lab-sat__preview-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* ---- 色阶控件 ---- */
+
+.lab-levels__btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px; /* 点击目标 ≥24px（design.md §7.6） */
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  background: var(--bg-elevated);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast),
+    border-color var(--motion-fast);
+}
+
+.lab-levels__btn:hover:not(:disabled) {
+  background: var(--accent-weak);
+}
+
+.lab-levels__btn.is-active {
+  color: var(--on-accent);
+  background: var(--accent); /* visionOS 实心选中态 */
+}
+
+.lab-levels__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ---- 拖入提示层（整页放置区） ---- */
+
+.lab-page__drop {
+  position: absolute;
+  inset: var(--space-3);
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-weak);
+  pointer-events: none;
+}
+
+.lab-page__drop-text {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  font-size: var(--text-sm);
+  color: var(--text-1);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* ---- reduced-motion：关闭非功能动画（design.md §5/§9） ---- */
+/* 例外：.lab-panel 翻页切换动画为空间线索功能动画，经 A 裁决豁免（2026-07-29） */
+
+@media (prefers-reduced-motion: reduce) {
+  .lab-output,
+  .lab-info__popover,
+  .lab-dock__handle {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* ---- 画面覆盖（开发文档-M4 §2.4） ---- */
+
+/* 覆盖层 img：叠于基图之上（DOM 序），120ms 透明度过渡 */
+.lab-viewport__overlay {
+  opacity: 0;
+  transition: opacity var(--motion-fast);
+}
+
+.lab-viewport__overlay.is-on {
+  opacity: 1;
+}
+
+/* 视口左上角覆盖源角标：玻璃浮层（样式向 __controls 看齐），可点击关闭 */
+.lab-viewport__overlay-badge {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 6px 4px var(--space-2);
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  font-size: var(--text-xs);
+  color: var(--text-1);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--motion-fast),
+    background-color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.lab-viewport__overlay-badge.is-on {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.lab-viewport__overlay-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.lab-viewport__overlay-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.lab-viewport__overlay-close:hover {
+  color: var(--text-1);
+  background: var(--accent-weak);
+}
+
+/* ---- 覆盖开关（iOS 风格 toggle，§4.1 switch 形态；后续可覆盖工具复用） ---- */
+
+.lab-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-glass-soft);
+  transition:
+    background-color var(--motion-fast),
+    border-color var(--motion-fast);
+}
+
+.lab-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition:
+    transform var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.lab-switch.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.lab-switch.is-on::after {
+  transform: translateX(16px);
+  background: var(--on-accent);
+}
+
+/* 小号 switch（线列表取样点模式行内开关） */
+.lab-switch--sm {
+  width: 28px;
+  height: 16px;
+}
+
+.lab-switch--sm::after {
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+}
+
+.lab-switch--sm.is-on::after {
+  transform: translateX(12px);
+}
+
+/* ---- 覆盖激活角标（右上，与右下 flyout-mark 错开）：accent 实心点 + 岛底色描边切开 ---- */
+.lab-toolbar__overlay-mark {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-elevated);
+  pointer-events: none;
+}
+
+/* ---- 划线叠加 canvas ---- */
+.lab-viewport__strokes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* stroke 光标 */
+.lab-viewport.is-stroking { cursor: crosshair; }
+.lab-viewport.is-space-pan { cursor: grab; }
+.lab-viewport.is-space-pan:active { cursor: grabbing; }
+
+/* ---- 底部色彩旅程抽屉（分析面板同款玻璃） ---- */
+/* 进出动画为空间线索功能动画，经 A 裁决豁免 reduced-motion */
+.lab-stroke-drawer {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  height: min(40%, 320px);
+  z-index: 2;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  overflow: hidden;
+  animation: stroke-drawer-in 200ms ease-out;
+}
+
+.lab-stroke-drawer.is-closing {
+  animation: none;
+  transform: translateY(calc(100% + 12px));
+  transition: transform 150ms ease-out;
+  pointer-events: none;
+}
+
+@keyframes stroke-drawer-in {
+  from { transform: translateY(calc(100% + 12px)); }
+  to { transform: translateY(0); }
+}
+
+.lab-stroke-drawer__inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--space-4);
+  gap: var(--space-2);
+}
+
+.lab-stroke-drawer__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.lab-stroke-drawer__title {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  color: var(--text-title);
+  white-space: nowrap;
+}
+
+.lab-stroke-drawer__chips {
+  display: flex;
+  gap: var(--space-1);
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.lab-stroke-drawer__strip {
+  width: 100%;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  display: block;
+}
+
+.lab-stroke-drawer__curve {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  display: block;
+}
+
+/* 事件行（色带与曲线之间，26px 从曲线区让出；M4.9） */
+.lab-stroke-drawer__events {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 26px;
+  flex: none;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--text-2);
+}
+
+.lab-stroke-drawer__event {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lab-stroke-drawer__event i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* 面板与控钮底部让位 */
+.lab-page.has-stroke-drawer .lab-output {
+  bottom: calc(24px + min(40%, 320px));
+}
+
+.lab-page.has-stroke-drawer .lab-dock {
+  bottom: calc(24px + min(40%, 320px));
+}
+
+.lab-page.has-stroke-drawer .lab-viewport__controls {
+  bottom: calc(var(--space-3) + 12px + min(40%, 320px));
+}
+
+/* ---- 划线面板 ---- */
+.lab-stroke__params {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.lab-stroke__param-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lab-stroke__label {
+  font-size: var(--text-xs);
+  color: var(--text-2);
+}
+
+.lab-stroke__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-4);
+}
+
+.lab-stroke__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--motion-fast);
+}
+
+.lab-stroke__row:hover {
+  background: var(--accent-weak);
+}
+
+.lab-stroke__row.is-active {
+  background: var(--accent-weak);
+  border: 1px solid var(--line);
+}
+
+.lab-stroke__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.lab-stroke__name {
+  flex: 1;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--text-1);
+}
+
+.lab-stroke__btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  transition: color var(--motion-fast);
+}
+
+.lab-stroke__btn:hover {
+  color: var(--text-1);
+}
+
+/* 导出按钮（全宽面板控件，风格对齐现有控件；划线说明图 / 主色板横条共用） */
+.lab-stroke__export,
+.lab-palette__export {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast),
+    border-color var(--motion-fast),
+    color var(--motion-fast);
+}
+
+.lab-stroke__export:hover:not(:disabled),
+.lab-palette__export:hover:not(:disabled) {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+}
+
+.lab-stroke__export:disabled,
+.lab-palette__export:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+/* ---- 色彩和谐面板（M4.9） ---- */
+.lab-harmony__verdict {
+  margin-top: var(--space-3);
+  text-align: center;
+  font-weight: 600;
+  font-size: var(--text-md);
+  color: var(--text-1);
+}
+
+.lab-harmony__row {
+  margin-top: var(--space-1);
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--text-2);
+}
+
+.lab-harmony__swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: center;
+}
+
+.lab-harmony__swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.lab-harmony__swatch-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+}
+
+.lab-harmony__swatch-hex,
+.lab-harmony__swatch-pct {
+  font-size: 9px;
+  color: var(--text-3);
+}
+
+/* ---- 主色板面板（M4.7，M4.7.1 色块拼图条 UI 优化） ---- */
+.lab-palette__strip {
+  display: flex;
+  height: 44px;
+  margin-top: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.lab-palette__strip-block {
+  min-width: 4px;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: filter var(--motion-fast);
+}
+
+.lab-palette__strip-block:hover {
+  filter: brightness(1.12);
+}
+
+.lab-palette__strip-block.is-copied {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.lab-palette__hint {
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+
+/* 读数明细（全部展示；12px 两行，避免挤密） */
+.lab-palette__rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.lab-palette__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: color var(--motion-fast);
+}
+
+.lab-palette__row:hover .lab-palette__row-main {
+  color: var(--text-1);
+}
+
+.lab-palette__row.is-copied .lab-palette__row-main {
+  color: var(--accent);
+}
+
+.lab-palette__row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.lab-palette__row-main {
+  color: var(--text-2);
+}
+
+.lab-palette__row-sub {
+  color: var(--text-3);
+}
+
+.lab-palette__row-chip {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  flex-shrink: 0;
+  margin-top: 3px;
+}

@@ -1,0 +1,144 @@
+/* 应用内确认对话框 · 公共 UI（design.md §7.10 玻璃浮层进出场惯例）：
+   全屏遮罩 + 居中玻璃面板，压过一切浮层；遮罩/取消/Esc 均视为取消。
+   进场面板自下 8px 滑入 + 淡入，退场反向；reduced-motion 豁免。 */
+.ystk-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 200; /* 高于 toast(100) 与库详情(40)/识图小窗(60) 等全部浮层 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ystk-confirm__mask {
+  position: absolute;
+  inset: 0;
+  /* 遮罩口径同详情页覆盖层（LibraryPage.css .lib-detail-overlay），
+     确认框更轻，透明度 45%、blur 8px */
+  background-color: color-mix(in srgb, var(--bg-app) 45%, transparent);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+  backdrop-filter: blur(8px) saturate(1.1);
+  animation: ystk-confirm-fade var(--motion-base);
+  transition: opacity var(--motion-base);
+}
+
+.ystk-confirm__panel {
+  position: relative;
+  width: min(400px, calc(100vw - var(--space-8)));
+  padding: var(--space-5) var(--space-6);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-float);
+  animation: ystk-confirm-in var(--motion-base);
+  transition:
+    opacity var(--motion-base),
+    transform var(--motion-base);
+}
+
+.ystk-confirm__title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.ystk-confirm__msg {
+  margin: 0 0 var(--space-5);
+  font-size: var(--text-md);
+  line-height: 1.6;
+  color: var(--text-2);
+  white-space: pre-wrap; /* 长文案自动换行，保留既有换行 */
+  overflow-wrap: anywhere; /* 超长文件名等无断点串不伸出弹窗（2026-08-23 用户反馈） */
+}
+
+.ystk-confirm__btns {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.ystk-confirm__btn {
+  min-width: 72px;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--bg-glass-soft);
+  color: var(--text-1);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast),
+    border-color var(--motion-fast),
+    color var(--motion-fast);
+}
+
+.ystk-confirm__btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ystk-confirm__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 确认钮：实心选中态（design.md §3.3） */
+.ystk-confirm__btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.ystk-confirm__btn--primary:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  filter: brightness(1.06);
+}
+
+/* 破坏性操作：确认钮换 danger 语义色（设计系统功能色，两主题一致） */
+.ystk-confirm__btn--primary.is-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+/* 退场：遮罩淡出、面板向下 8px 淡出（与进场同速，--motion-base） */
+.ystk-confirm.is-leaving .ystk-confirm__mask {
+  opacity: 0;
+}
+
+.ystk-confirm.is-leaving .ystk-confirm__panel {
+  opacity: 0;
+  transform: translateY(var(--space-2));
+}
+
+@keyframes ystk-confirm-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ystk-confirm-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--space-2));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ystk-confirm__mask,
+  .ystk-confirm__panel {
+    animation: none;
+    transition: none;
+  }
+}

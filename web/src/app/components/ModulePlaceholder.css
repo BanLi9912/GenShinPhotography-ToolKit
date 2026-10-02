@@ -1,0 +1,42 @@
+.module-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  height: 100%;
+  padding: var(--space-8);
+  text-align: center;
+}
+
+.module-placeholder__code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.3em;
+  color: var(--text-3);
+}
+
+.module-placeholder__name {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.module-placeholder__rule {
+  width: 32px;
+  height: 1px;
+  background: var(--line);
+}
+
+.module-placeholder__tagline {
+  max-width: 420px;
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+
+.module-placeholder__hint {
+  margin-top: var(--space-5);
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}

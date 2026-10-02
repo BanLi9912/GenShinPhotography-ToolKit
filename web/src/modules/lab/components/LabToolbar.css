@@ -1,0 +1,112 @@
+/* M4 图像分析实验室：壳级悬浮岛工具栏（M1 SideToolbar 同款），仅 /lab 路由滑入，切走向左收回；两岛接力时序由 AppShell 控制 */
+
+.lab-toolbar {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  opacity: 0;
+  transform: translate(-140%, -50%);
+  pointer-events: none;
+  user-select: none;
+  transition:
+    transform var(--motion-base),
+    opacity var(--motion-base),
+    background-color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.lab-toolbar.is-visible {
+  opacity: 1;
+  transform: translate(0, -50%);
+  pointer-events: auto;
+}
+
+.lab-toolbar__btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--text-2);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast),
+    box-shadow var(--motion-fast);
+}
+
+.lab-toolbar__btn:hover:not(:disabled) {
+  color: var(--text-1);
+  background: var(--accent-weak);
+}
+
+.lab-toolbar__btn.is-active {
+  color: var(--accent);
+  background: var(--accent-weak);
+}
+
+.lab-toolbar__btn.is-star {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.lab-toolbar__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.lab-toolbar__divider {
+  width: 20px;
+  height: 1px;
+  margin: 2px auto;
+  background: var(--line);
+  transition: background-color var(--motion-base);
+}
+
+.lab-toolbar__flyout-mark {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* 饱和度 flyout 锚点：按钮定位参照，不改变岛布局 */
+.lab-toolbar__flyout-anchor {
+  position: relative;
+  display: flex;
+}
+
+/* flyout 子菜单：按钮右侧悬浮小岛（canvas-toolbar 体系同款玻璃肤） */
+.lab-toolbar__flyout {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  z-index: 21;
+  display: flex;
+  gap: 2px;
+  padding: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  transform: translateY(-50%);
+  animation: lab-flyout-in var(--motion-fast) ease-out;
+}
+
+@keyframes lab-flyout-in {
+  from { opacity: 0; transform: translate(-4px, -50%); }
+  to { opacity: 1; transform: translate(0, -50%); }
+}

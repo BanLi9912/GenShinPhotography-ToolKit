@@ -1,0 +1,40 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# 超分模型与 ORT WASM（由 predev / prebuild 自动从 node_modules 复制）
+public/superres-assets/
+
+# 图库磁盘位置登记表（dev server 侧「在文件夹中打开」用；含绝对路径，不入库）
+.ystk-library-paths.json
+.ystk-library-paths.json.tmp
+
+# SR.0 权重验证工作区：原始权重 / ONNX 转换产物 / 转换 venv（一律不入库）
+sr-models/
+scripts/convert-sr-models/.venv/
+scripts/convert-sr-models/.pip-cache/
+scripts/convert-sr-models/weights/
+*.pth
+*.safetensors
+*.zip
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
