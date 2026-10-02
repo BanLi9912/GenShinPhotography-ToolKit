@@ -1,4 +1,9 @@
-import type { CuganScale, DenoiseLevel, SuperResBackend } from "./store";
+import type {
+  CuganScale,
+  DenoiseLevel,
+  SuperResBackend,
+  SuperResDeviceMode,
+} from "./store";
 import type { SuperResWorkerRequest, SuperResWorkerResponse } from "./workerProtocol";
 
 /**
@@ -93,6 +98,8 @@ export interface SuperResRunOptions {
   restoreOriginalSize?: boolean;
   /** 超分线抗锯齿前置开关（默认关）：先用 1x-SuperScale 抗锯齿修复一遍再进 CUGAN 超分；纹理保全线忽略 */
   antialias?: boolean;
+  /** 推理设备档（PR-008/2026-10-02 防崩）：gpu = WebGPU 核显优先；cpu = 仅 WASM。缺省 "gpu" */
+  deviceMode?: SuperResDeviceMode;
 }
 
 export interface SuperResOutcome {
@@ -102,12 +109,16 @@ export interface SuperResOutcome {
 }
 
 let activeBackend: SuperResBackend = "wasm";
+/** worker 自报的实际推理用卡名（PR-008 诊断项：主线程探针与 worker 实际用卡无机制保证一致）；无则空 */
+let activeAdapter = "";
 
 function assertNotAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new DOMException("已取消", "AbortError");
 }
 
-async function webgpuProbe(): Promise<{ ok: boolean; name: string }> {
+async function webgpuProbe(
+  powerPreference: "low-power" = "low-power",
+): Promise<{ ok: boolean; name: string }> {
   const gpu = (
     navigator as Navigator & {
       gpu?: {
@@ -117,19 +128,20 @@ async function webgpuProbe(): Promise<{ ok: boolean; name: string }> {
   ).gpu;
   if (!gpu?.requestAdapter) return { ok: false, name: "" };
   try {
-    // 与 worker 内 ORT 建 WebGPU EP 的偏好保持一致：请求独显（high-performance），
-    // 使探测到的 adapter 名即实际推理用卡。
-    const adapter = await gpu.requestAdapter({ powerPreference: "high-performance" });
+    // 防崩口径（PR-008/2026-10-02）：核显优先，绕开独显 WebGPU 驱动雷区；
+    // 与 worker 内 ORT 偏好保持一致，探测到的 adapter 即实际推理用卡。
+    const adapter = await gpu.requestAdapter({ powerPreference });
     if (!adapter) return { ok: false, name: "" };
+    // adapter.info（新 API，新版 Chromium）优先；requestAdapterInfo（已废弃）兜底
+    const a = adapter as {
+      info?: { description?: string; device?: string; vendor?: string };
+      requestAdapterInfo?: () => Promise<{ description?: string; device?: string }>;
+    };
+    if (a.info) return { ok: true, name: a.info.description || a.info.device || a.info.vendor || "" };
     let name = "";
-    const infoFn = (
-      adapter as {
-        requestAdapterInfo?: () => Promise<{ description?: string; device?: string }>;
-      }
-    ).requestAdapterInfo;
-    if (typeof infoFn === "function") {
+    if (typeof a.requestAdapterInfo === "function") {
       try {
-        const info = await infoFn.call(adapter);
+        const info = await a.requestAdapterInfo();
         name = info?.description || info?.device || "";
       } catch {
         /* 部分环境不暴露适配器信息，忽略 */
@@ -151,7 +163,11 @@ class OrtWorkerSession {
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   ready: Promise<SuperResBackend>;
 
-  constructor(modelFile: string, preferWebgpu: boolean) {
+  constructor(
+    modelFile: string,
+    preferWebgpu: boolean,
+    powerPreference: "high-performance" | "low-power" = "low-power",
+  ) {
     this.worker = new Worker(
       new URL("./superres.worker.ts", import.meta.url),
       { type: "module" },
@@ -162,7 +178,7 @@ class OrtWorkerSession {
       this.failAll(new Error(e.message || "推理 Worker 异常"));
     this.ready = this.request(
       "init",
-      { type: "init", model: modelFile, preferWebgpu },
+      { type: "init", model: modelFile, preferWebgpu, powerPreference },
       INIT_TIMEOUT_MS,
     ) as Promise<SuperResBackend>;
   }
@@ -181,6 +197,8 @@ class OrtWorkerSession {
     if (msg.type === "ready") {
       // init 请求解析出后端字符串（webgpu/wasm），而非整条消息对象
       p.resolve(msg.backend);
+      // worker 自报的实际用卡：进度区优先显示它（拿不到名时退回主线程探针）
+      activeAdapter = msg.adapterName ?? "";
     } else if (msg.type === "error") {
       p.reject(new Error(msg.message));
     } else {
@@ -358,7 +376,8 @@ async function runModelPass(
     throw new Error(`输出 ${outW}×${outH} 超出画布上限，请改用更低倍率`);
   }
 
-  const session = new OrtWorkerSession(def.file, preferWebgpu);
+  // GPU 档恒核显优先（PR-008/2026-10-02 防崩口径），不设 high-performance 入口
+  const session = new OrtWorkerSession(def.file, preferWebgpu, "low-power");
   try {
     const backend = await session.ready;
     activeBackend = backend;
@@ -492,11 +511,19 @@ export async function runSuperRes(
   }
   const srcCanvas = imageToCanvas(img);
 
-  const gpuProbe = await webgpuProbe();
+  const deviceMode = options.deviceMode ?? "gpu";
+  // 仅 CPU 档：不碰 WebGPU（连探针都不请求），从根上杜绝 WebGPU 崩溃
+  const gpuProbe = deviceMode === "gpu" ? await webgpuProbe() : { ok: false, name: "CPU" };
   const gpuOk = gpuProbe.ok;
   assertNotAborted(signal);
   const report = (percent: number, phase: string) =>
-    onProgress?.({ percent, phase, backend: activeBackend, adapter: gpuProbe.name });
+    onProgress?.({
+      percent,
+      phase,
+      backend: activeBackend,
+      // 优先 worker 自报的实际用卡；拿不到再退回主线程探针的名字
+      adapter: activeBackend === "webgpu" ? activeAdapter || gpuProbe.name : "",
+    });
 
   report(2, "检测 GPU…");
 
@@ -534,11 +561,13 @@ export async function runSuperRes(
 
   let outCanvas: HTMLCanvasElement | undefined;
   if (gpuOk) {
-    report(2, "加载模型（GPU）…");
+    report(2, "加载模型（GPU，核显优先）…");
     try {
       outCanvas = await runChain(true);
     } catch (error) {
       if (signal?.aborted) throw error;
+      // 吞错可见（PR-008 诊断项）：GPU 软失败原因不再静默——开发者日志开着时自动入库
+      console.warn("[superres] GPU 路径失败，回退 CPU（WASM）", error);
     }
   }
   if (!outCanvas) {
@@ -599,11 +628,19 @@ export async function runTextureRestore(
   const height = img.naturalHeight;
   const srcCanvas = imageToCanvas(img);
 
-  const gpuProbe = await webgpuProbe();
+  const deviceMode = options.deviceMode ?? "gpu";
+  // 仅 CPU 档：不碰 WebGPU（连探针都不请求），从根上杜绝 WebGPU 崩溃
+  const gpuProbe = deviceMode === "gpu" ? await webgpuProbe() : { ok: false, name: "CPU" };
   const gpuOk = gpuProbe.ok;
   assertNotAborted(signal);
   const report = (percent: number, phase: string) =>
-    onProgress?.({ percent, phase, backend: activeBackend, adapter: gpuProbe.name });
+    onProgress?.({
+      percent,
+      phase,
+      backend: activeBackend,
+      // 优先 worker 自报的实际用卡；拿不到再退回主线程探针的名字
+      adapter: activeBackend === "webgpu" ? activeAdapter || gpuProbe.name : "",
+    });
 
   report(2, "检测 GPU…");
 
@@ -619,11 +656,13 @@ export async function runTextureRestore(
       signal,
     );
   if (gpuOk) {
-    report(2, "加载模型（GPU）…");
+    report(2, "加载模型（GPU，核显优先）…");
     try {
       pass1 = await runPass1(true);
     } catch (error) {
       if (signal?.aborted) throw error;
+      // 吞错可见（PR-008 诊断项）：GPU 软失败原因不再静默——开发者日志开着时自动入库
+      console.warn("[superres] GPU 路径失败，回退 CPU（WASM）", error);
     }
   }
   if (!pass1) {
@@ -643,11 +682,13 @@ export async function runTextureRestore(
       signal,
     );
   if (gpuOk) {
-    report(10, "加载模型（GPU）…");
+    report(10, "加载模型（GPU，核显优先）…");
     try {
       pass2 = await runPass2(true);
     } catch (error) {
       if (signal?.aborted) throw error;
+      // 吞错可见（PR-008 诊断项）：GPU 软失败原因不再静默——开发者日志开着时自动入库
+      console.warn("[superres] GPU 路径失败，回退 CPU（WASM）", error);
     }
   }
   if (!pass2) {

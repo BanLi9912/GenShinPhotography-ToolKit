@@ -9,8 +9,68 @@ const ASSET_BASE = "/superres-assets/";
 
 ort.env.wasm.wasmPaths = `${ASSET_BASE}js/`;
 
-// 双显卡笔记本默认 adapter 是核显；ORT 建 WebGPU EP 时按此偏好请求独显（dGPU）。
-ort.env.webgpu.powerPreference = "high-performance";
+/**
+ * 读取适配器名（worker 自报**实际推理用卡**，PR-008 诊断项 / 2026-10-02）。
+ *
+ * 优先问 ORT 自己建 WebGPU EP 时用的那个 adapter（session 建好后即可读，最可信——
+ * 「自报的卡」与「推理用的卡」是同一张，不靠偏好推断）；拿不到再按同偏好另请一次。
+ * `adapter.info` 是新 API（新版 Chromium），`requestAdapterInfo()` 已废弃、仅作兜底；
+ * 都拿不到就返回空串——空串不影响推理，只影响进度区显示。
+ */
+async function readAdapterName(): Promise<string> {
+  const nameOf = (info?: {
+    description?: string;
+    device?: string;
+    vendor?: string;
+  }): string => (info ? info.description || info.device || info.vendor || "" : "");
+  const fromAdapter = async (adapter: unknown): Promise<string> => {
+    if (!adapter) return "";
+    const a = adapter as {
+      info?: { description?: string; device?: string; vendor?: string };
+      requestAdapterInfo?: () => Promise<{
+        description?: string;
+        device?: string;
+        vendor?: string;
+      }>;
+    };
+    if (a.info) return nameOf(a.info);
+    if (typeof a.requestAdapterInfo === "function") {
+      try {
+        return nameOf(await a.requestAdapterInfo());
+      } catch {
+        /* 部分环境不暴露适配器信息，忽略 */
+      }
+    }
+    return "";
+  };
+
+  try {
+    const used = await fromAdapter(ort.env.webgpu.adapter);
+    if (used) return used;
+  } catch {
+    /* ORT 未暴露 adapter 时走下面的兜底 */
+  }
+  try {
+    const gpu = (
+      navigator as Navigator & {
+        gpu?: {
+          requestAdapter?: (options?: {
+            powerPreference?: "high-performance" | "low-power";
+          }) => Promise<unknown>;
+        };
+      }
+    ).gpu;
+    if (!gpu?.requestAdapter) return "";
+    // 与 EP 内部请求同偏好，正常返回同一张卡（枚举级请求本身轻量）
+    return await fromAdapter(
+      await gpu.requestAdapter({
+        powerPreference: ort.env.webgpu.powerPreference ?? "low-power",
+      }),
+    );
+  } catch {
+    return "";
+  }
+}
 
 /**
  * 每个 Worker 拥有独立的 ORT 模块上下文：
@@ -31,6 +91,9 @@ workerScope.onmessage = async (e) => {
 
   if (msg.type === "init") {
     try {
+      // 防崩口径（PR-008/2026-10-02）：适配器偏好由主线程按推理设备档传入，缺省核显优先——
+      // 不再在模块顶层硬编码 "high-performance"（请求独显正是 N 卡 WebGPU 崩溃的风险源）。
+      ort.env.webgpu.powerPreference = msg.powerPreference ?? "low-power";
       const url = `${ASSET_BASE}models/${msg.model}.onnx`;
       session = await ort.InferenceSession.create(url, {
         executionProviders: msg.preferWebgpu ? ["webgpu"] : ["wasm"],
@@ -42,6 +105,7 @@ workerScope.onmessage = async (e) => {
       workerScope.postMessage({
         type: "ready",
         backend: msg.preferWebgpu ? "webgpu" : "wasm",
+        adapterName: msg.preferWebgpu ? await readAdapterName() : "",
       });
     } catch (error) {
       workerScope.postMessage({

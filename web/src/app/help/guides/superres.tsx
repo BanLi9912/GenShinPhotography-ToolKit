@@ -5,7 +5,8 @@ import type { Guide } from "./types";
  * 图像超分（SR）使用说明。
  *
  * 配图：`FIGURES` 是**唯一数据源**（序号 → 图注 + 该截什么），正文用 `fig("01")` 引用，
- * 文件放 `web/public/help/superres/01.png` 起（png/jpg/jpeg/webp 均认）。
+ * 文件放 `web/public/help/superres/` 下（png/jpg/jpeg/webp 均认）。
+ * 序号**允许跳号**（2026-10-02：03、04、05 这三号确认不需要配图，槽位已删，剩下的沿用原号）。
  * 图不在时页面自动显示带文件名与拍摄说明的占位。
  */
 const FIGURES = {
@@ -18,21 +19,6 @@ const FIGURES = {
     caption: "两条线：超分 / 纹理保全",
     brief:
       "「超分设置」卡最上方那两个并排的模式按钮（超分 / 纹理保全），当前选中态可见。",
-  },
-  "03": {
-    caption: "超分线：倍率与降噪档位",
-    brief:
-      "选「超分」后出现的两排按钮：上一排 2x/3x/4x（带「四档降噪 / 三档降噪」副标），下一排是当前倍率对应的降噪档（如 2x 的无降噪 / 1x 降噪 / 2x 降噪 / 3x 降噪）。",
-  },
-  "04": {
-    caption: "超分线的两个开关",
-    brief:
-      "「抗锯齿预处理」与「超分后压缩回原分辨率」两个勾选项，连同它们右侧那两行说明文字。",
-  },
-  "05": {
-    caption: "纹理保全线",
-    brief:
-      "切到「纹理保全」后的设置区：只剩「处理后压缩回原分辨率」一个开关，以及下面那行「SuperScale 1x 抗锯齿 → AnimeSharpV4 2x 超分…」提示。",
   },
   "06": {
     caption: "开始按钮与处理中进度",
@@ -128,7 +114,6 @@ export const SUPERRES_GUIDE: Guide = {
       title: "三、超分线：倍率与降噪档",
       body: (
         <>
-          {fig("03")}
           <h3>倍率</h3>
           <ul>
             <li>
@@ -161,7 +146,6 @@ export const SUPERRES_GUIDE: Guide = {
       title: "四、超分线的两个开关",
       body: (
         <>
-          {fig("04")}
           <ul>
             <li>
               <strong>抗锯齿预处理</strong>：先用 SuperScale 1x 把原图抗锯齿修复一遍，再进 Real-CUGAN 超分。
@@ -181,7 +165,6 @@ export const SUPERRES_GUIDE: Guide = {
       title: "五、纹理保全线",
       body: (
         <>
-          {fig("05")}
           <ul>
             <li>
               内部固定两步：SuperScale 1x 抗锯齿 → AnimeSharpV4 2x 超分。

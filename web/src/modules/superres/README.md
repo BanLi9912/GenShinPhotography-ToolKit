@@ -16,14 +16,23 @@
 - 模型与 ORT 运行时由 `predev` / `prebuild`（`scripts/copy-superres-assets.mjs`）
   从 node_modules 复制到 `public/superres-assets/`，不入库。
 
-## dGPU（独显）调用
+## 推理设备与选卡（PR-008 防崩口径，2026-10-02 改口径）
 
-- 推理 WebGPU 时按 **`high-performance`** 请求独显：worker 内 `ort.env.webgpu.powerPreference =
-  "high-performance"`，引擎探测同样带 `{ powerPreference: "high-performance" }`——进度区显示的
-  adapter 名（如 `GPU · WebGPU · NVIDIA GeForce RTX …`）即**实际推理用卡**。
-- 双显卡笔记本若仍走核显：浏览器选卡由系统决定，JS 无法强制指定物理显卡。Windows 兜底：
-  **设置 → 系统 → 屏幕 → 显示卡 → 浏览器应用 → 选项设「高性能（NVIDIA GPU）」**，然后重启浏览器再试。
-- 无 dGPU / WebGPU 不可用时自动回退 WASM（CPU），进度区显示 `CPU · WASM`。
+- 设置区「推理设备」两档，**默认「GPU（核显优先）」**：WebGPU 适配器按 **`low-power`**
+  请求（主线程探针与 worker 内 ORT 同偏好）——混合显卡笔记本走核显，**有意避开独显**：
+  部分 N 卡驱动的 WebGPU 实现在**模型上载期**会打崩 GPU 进程，整页重载丢状态（PR-008，
+  2026-10-02 日志实锤复发过一次）；档位**跨会话持久化**（localStorage `ystk-superres`），
+  防崩设置不会因刷新而丢。
+- **「仅 CPU」档**：完全不建 WebGPU（连 `requestAdapter` 探针都不发），任何机器上都不可能
+  触发 WebGPU 崩溃，代价是慢数倍——GPU 也不稳的机器的逃生口。
+- **无「高性能（独显）」档**：等于给崩溃留门，不做；性能敏感场景将来另议。
+- **单独显台式机（无核显）**：`low-power` 仍会落到那张独显，崩溃风险不变——若复现崩溃请改「仅 CPU」
+  （WebGPU 标准无枚举/点名物理卡能力，JS 无法强制指定物理显卡）。
+- **进度区卡名 = worker 自报的实际推理用卡**（worker 内读 ORT 建 EP 用的 adapter，
+  `adapter.info` 新 API / `requestAdapterInfo` 兜底）：显示空说明浏览器未暴露适配器信息；
+  GPU 软失败回退 CPU（WASM）时进度区显示 `CPU · WASM`。
+- **GPU 软失败不再静默**：回退 CPU 时 `console.warn("[superres] GPU 路径失败，回退 CPU（WASM）")`，
+  开发者日志开着时自动入库，下次排查有据可依。
 
 ## tile 尺寸
 

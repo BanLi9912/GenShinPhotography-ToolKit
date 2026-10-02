@@ -111,6 +111,8 @@ export function SuperResPage() {
   );
   const antialias = useSuperResStore((s) => s.antialias);
   const setAntialias = useSuperResStore((s) => s.setAntialias);
+  const deviceMode = useSuperResStore((s) => s.deviceMode);
+  const setDeviceMode = useSuperResStore((s) => s.setDeviceMode);
   const setRunning = useSuperResStore((s) => s.setRunning);
   const setIdle = useSuperResStore((s) => s.setIdle);
   const setResult = useSuperResStore((s) => s.setResult);
@@ -139,6 +141,7 @@ export function SuperResPage() {
       denoise: denoiseLevel,
       restoreOriginalSize: restore,
       antialias,
+      deviceMode,
     } = s;
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -148,6 +151,7 @@ export function SuperResPage() {
       const opts = {
         signal: controller.signal,
         restoreOriginalSize: restore,
+        deviceMode,
         onProgress: (p: {
           percent: number;
           phase: string;
@@ -429,6 +433,35 @@ export function SuperResPage() {
               </p>
             </>
           )}
+          <div className="superres-device">
+            <span className="superres-device__label">推理设备</span>
+            <div className="superres-options superres-options--mode">
+              <button
+                type="button"
+                className={`superres-option${deviceMode === "gpu" ? " is-active" : ""}`}
+                aria-pressed={deviceMode === "gpu"}
+                disabled={running}
+                onClick={() => setDeviceMode("gpu")}
+              >
+                <span className="superres-option__name">GPU（核显优先）</span>
+                <span className="superres-option__desc">WebGPU · 快</span>
+              </button>
+              <button
+                type="button"
+                className={`superres-option${deviceMode === "cpu" ? " is-active" : ""}`}
+                aria-pressed={deviceMode === "cpu"}
+                disabled={running}
+                onClick={() => setDeviceMode("cpu")}
+              >
+                <span className="superres-option__name">仅 CPU</span>
+                <span className="superres-option__desc">WASM · 最稳但慢数倍</span>
+              </button>
+            </div>
+            <p className="superres-card__hint">
+              默认核显优先（WebGPU 按 low-power 请求），避开部分独显驱动打崩 GPU
+              进程的问题；仅 CPU 完全不碰 WebGPU，任何机器都不会崩，代价是慢数倍
+            </p>
+          </div>
           <button
             type="button"
             className="superres-run"

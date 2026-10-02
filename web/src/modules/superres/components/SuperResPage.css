@@ -284,6 +284,18 @@
   color: var(--text-3);
 }
 
+/* 推理设备行（PR-008 防崩）：标签 + 两段按钮 + 说明，内部间距比卡片行距紧一档 */
+.superres-device {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.superres-device__label {
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+
 .superres-run {
   display: inline-flex;
   align-items: center;
