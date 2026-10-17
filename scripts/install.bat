@@ -547,6 +547,11 @@ if "%DEPS_OK%"=="1" (
 )
 echo   [安装] npm 依赖（约 330MB；必须含 devDependencies：超分 2x 权重来源 upscalejs 在 devDependencies）
 pushd "%WEBDIR%"
+rem --- 便携 Node 前置 PATH（2026-10-02 修复：npm 生命周期脚本只查 PATH）---
+rem npm.cmd 本体用同目录 node.exe 启动、不依赖 PATH；但依赖包的 postinstall 与
+rem npm run 的脚本一律经 cmd /c node 执行、只查 PATH——不前置则无系统 Node 的
+rem 机器必然 'node' is not recognized（protobufjs postinstall 实炸）。
+set "PATH=%NODEDIR%;%PATH%"
 set "NPM_OK=0"
 echo         源：%NPM_REGISTRY%
 call "%NODEDIR%\npm.cmd" install --registry=%NPM_REGISTRY% --no-audit --no-fund
@@ -558,8 +563,9 @@ if "%NPM_OK%"=="0" (
 )
 popd
 if "%NPM_OK%"=="0" (
-  echo   [失败] npm install 失败（镜像与默认源都失败）。请在 web 目录手动执行：
-  echo          "%NODEDIR%\npm.cmd" install
+  echo   [失败] npm install 失败（镜像与默认源都失败）。请在仓库根目录重新运行本脚本重试：
+  echo          scripts\install.bat
+  echo        若反复失败，把本窗口全部输出截图反馈给开发者。
   goto req_fail
 )
 echo         npm 依赖安装完成
@@ -567,6 +573,8 @@ echo         npm 依赖安装完成
 :req_predev
 echo   [自检] npm run predev（复制 ORT 运行时与 2x 权重到 public\superres-assets）
 pushd "%WEBDIR%"
+rem 便携 Node 前置 PATH（同前：npm run 的脚本只查 PATH，不前置则无系统 Node 的机器必炸）
+set "PATH=%NODEDIR%;%PATH%"
 call "%NODEDIR%\npm.cmd" run predev
 set "PREDEV_RC=%errorlevel%"
 popd
@@ -964,6 +972,8 @@ rem :predev_refresh —— 装完可选模型后刷新 public 资产
 :predev_refresh
 echo   [自检] npm run predev（把新模型复制到 public\superres-assets\models）
 pushd "%WEBDIR%"
+rem 便携 Node 前置 PATH（同前：npm run 的脚本只查 PATH，不前置则无系统 Node 的机器必炸）
+set "PATH=%NODEDIR%;%PATH%"
 call "%NODEDIR%\npm.cmd" run predev
 set "PD_RC=%errorlevel%"
 popd
