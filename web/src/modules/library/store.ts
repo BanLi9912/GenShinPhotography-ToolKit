@@ -896,6 +896,8 @@ async function openEntry(
 async function recoverActiveLibrary(
   entryAfterFailure: LibraryRegistryEntry,
 ): Promise<"none" | "recovered" | "failed"> {
+  // 保存失败时旧库仍完整驻留内存；重新激活会用磁盘旧态覆盖未保存编辑。
+  if (indexFile.hasPendingSave()) return "none";
   const prev = useLibraryStore.getState().current;
   if (!prev || prev.libraryId === entryAfterFailure.libraryId) return "none";
   const prevEntry = binding.getEntry(prev.libraryId);
@@ -1035,7 +1037,12 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
   /** 切换图库：先落盘卸载当前库，再打开目标库 */
   switchTo: async (libraryId: string) => {
     if (get().current?.libraryId === libraryId) return;
-    await indexFile.deactivateLibrary();
+    try {
+      await indexFile.deactivateLibrary();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err));
+      return;
+    }
     const entry = binding.getEntry(libraryId);
     if (!entry) return;
     const granted = await binding.ensureEntryPermission(entry, true);
@@ -1082,7 +1089,12 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
     const isCurrent = get().current?.libraryId === libraryId;
     if (isCurrent) {
       abortVisionRun("解绑图库"); // M3.5.3.4 中止原因逐字透传（小窗显示「已中止 · 解绑图库」）
-      await indexFile.deactivateLibrary();
+      try {
+        await indexFile.deactivateLibrary();
+      } catch (err) {
+        toast(err instanceof Error ? err.message : String(err));
+        return;
+      }
     }
     await binding.unbindLibrary(libraryId);
     set((s) => {

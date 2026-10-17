@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { restartBackupTimer, runBackup, stopBackup, useBackupStore } from "../backup";
 
 /**
@@ -6,7 +6,7 @@ import { restartBackupTimer, runBackup, stopBackup, useBackupStore } from "../ba
  * 开关 + 间隔档（5/10/30/60 分钟，默认 10）+ 立即备份按钮 + 状态行。
  * 备份对象 = 注册表中权限 granted 的图库的 .ystk 核心索引文件
  * （meta.json / index.json / vectors.bin，不含 thumbs），
- * 写入 devdata/backup/<libraryId>/latest/（只留一代，用户口径）。
+ * 写入 devdata/backup/<库名>--<libraryId>/latest/，另保留两代 history。
  * 样式全部复用 sc-devlog__* / sc-seg / sc-cmp__btn 既有类。
  * 注：说明段落按用户口径省略（同日「删掉设置里对日志的描述」一致）；
  * 开关右侧短提示保留。
@@ -19,14 +19,6 @@ export function BackupRow() {
   const lastAt = useBackupStore((s) => s.lastAt);
   const lastResult = useBackupStore((s) => s.lastResult);
   const [busy, setBusy] = useState(false);
-
-  // busy 是本地瞬态（runBackup 是"发完即忘"接口，没有回调）：手动触发后短暂置位，
-  // 真实进度看状态行与 toast；内部的串行锁才是防重入的保证
-  useEffect(() => {
-    if (!busy) return;
-    const id = setTimeout(() => setBusy(false), 800);
-    return () => clearTimeout(id);
-  }, [busy]);
 
   const toggle = (on: boolean) => {
     if (on) {
@@ -45,7 +37,7 @@ export function BackupRow() {
 
   const runNow = () => {
     setBusy(true);
-    void runBackup(true);
+    void runBackup(true).finally(() => setBusy(false));
   };
 
   const lastTime = lastAt
@@ -57,7 +49,7 @@ export function BackupRow() {
       <div className="sc-row">
         <span className="sc-row__label">图库索引备份</span>
         <div className="sc-switch">
-          <span className="sc-row__hint">定期备份 .ystk 索引，防识图信息丢失</span>
+          <span className="sc-row__hint">仅备份图库索引，保留最近 3 代；不含原图、画布与设置</span>
           <button
             type="button"
             role="switch"

@@ -9,6 +9,9 @@ export interface ToastItem {
   id: number;
   text: string;
   leaving: boolean;
+  /** 带 key 的提示持续显示，直到业务明确解除（保存失败等）。 */
+  key?: string;
+  action?: { label: string; run: () => void };
 }
 
 type ToastListener = (list: ToastItem[]) => void;
@@ -27,7 +30,8 @@ function emit(): void {
 export function toast(text: string): void {
   const id = nextId++;
   items = [...items, { id, text, leaving: false }];
-  if (items.length > 3) items = items.slice(items.length - 3);
+  const transient = items.filter((t) => !t.key).slice(-3);
+  items = items.filter((t) => t.key || transient.includes(t));
   emit();
   window.setTimeout(() => {
     items = items.map((t) => (t.id === id ? { ...t, leaving: true } : t));
@@ -37,6 +41,23 @@ export function toast(text: string): void {
       emit();
     }, EXIT_MS);
   }, VISIBLE_MS);
+}
+
+/** 同一业务只保留一条常驻提示；重试期间可更新文案并去掉动作按钮。 */
+export function persistentToast(
+  key: string,
+  text: string,
+  action?: ToastItem["action"],
+): void {
+  const existing = items.find((t) => t.key === key);
+  const next = { id: existing?.id ?? nextId++, key, text, action, leaving: false };
+  items = existing ? items.map((t) => t.key === key ? next : t) : [...items, next];
+  emit();
+}
+
+export function dismissToast(key: string): void {
+  items = items.filter((t) => t.key !== key);
+  emit();
 }
 
 /** 订阅当前列表（渲染器用）；返回退订函数 */

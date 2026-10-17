@@ -20,6 +20,11 @@ export function Toaster() {
           className={"ystk-toast__item" + (t.leaving ? " is-leaving" : "")}
         >
           {t.text}
+          {t.action && (
+            <button type="button" className="ystk-toast__action" onClick={t.action.run}>
+              {t.action.label}
+            </button>
+          )}
         </div>
       ))}
     </div>,

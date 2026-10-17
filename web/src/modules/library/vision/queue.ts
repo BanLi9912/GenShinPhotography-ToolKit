@@ -222,6 +222,11 @@ export async function runVisionQueue(
   // key 按当前供应商分流：自定义供应商用自己的 apiKey（2026-09-26 任务卡 §4.4③）
   const global = await loadVisionGlobal();
   const provider = getProvider(global.providerId);
+  // 价格按当前供应商分流（同 analyze.ts:69-73 的 key/model 分流先例）：
+  // 自定义供应商用自己的单价，MiniMax/fake 走全局字段；
+  // 轮次启动时打点，运行中改价不追溯本轮（现状语义，不改）
+  const priceSource =
+    (global.customProviders ?? []).find((p) => p.id === provider.id) ?? global;
   if (!provider.fakeResponse) {
     if (!global.enabled) {
       return { done: 0, failed: 0, blockedReason: "识图总开关未开启" };
@@ -385,9 +390,9 @@ export async function runVisionQueue(
         cost.completionTokens += usage.completionTokens;
         cost.cachedTokens += cached;
         cost.amount +=
-          (billableInput * global.priceInput +
-            cached * global.priceCached +
-            usage.completionTokens * global.priceOutput) /
+          (billableInput * (priceSource.priceInput ?? 0) +
+            cached * (priceSource.priceCached ?? 0) +
+            usage.completionTokens * (priceSource.priceOutput ?? 0)) /
           1_000_000;
         report(true);
         // 预算限额（budgetLimit > 0 时）：按「提醒块」判定——本块新增金额

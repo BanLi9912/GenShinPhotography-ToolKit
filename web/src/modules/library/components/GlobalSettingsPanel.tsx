@@ -311,9 +311,18 @@ export function LibraryGlobalSettingsPanel() {
   ) => {
     const v = Number(raw);
     if (!Number.isFinite(v) || v < 0) return;
-    if (key === "priceInput") patchGlobal({ priceInput: v });
-    else if (key === "priceCached") patchGlobal({ priceCached: v });
-    else patchGlobal({ priceOutput: v });
+    // 价格按当前供应商分流写入（同 setCurrentKey / setCurrentModel 先例）：
+    // 自定义供应商写自己的三字段，MiniMax 写全局字段
+    if (key === "priceInput") {
+      if (currentCustom) patchCustom(currentCustom.id, { priceInput: v });
+      else patchGlobal({ priceInput: v });
+    } else if (key === "priceCached") {
+      if (currentCustom) patchCustom(currentCustom.id, { priceCached: v });
+      else patchGlobal({ priceCached: v });
+    } else {
+      if (currentCustom) patchCustom(currentCustom.id, { priceOutput: v });
+      else patchGlobal({ priceOutput: v });
+    }
   };
 
   /**
@@ -324,6 +333,14 @@ export function LibraryGlobalSettingsPanel() {
   const currentCustom = g?.customProviders.find((p) => p.id === g.providerId);
   const currentKey = currentCustom ? currentCustom.apiKey : (g?.apiKey ?? "");
   const currentModel = currentCustom ? currentCustom.model : (g?.model ?? "");
+  /** 当前价格：同样按供应商分流读取（自定义供应商用自己的单价，MiniMax 用全局三字段） */
+  const currentPriceInput = currentCustom ? currentCustom.priceInput : g?.priceInput;
+  const currentPriceCached = currentCustom
+    ? currentCustom.priceCached
+    : g?.priceCached;
+  const currentPriceOutput = currentCustom
+    ? currentCustom.priceOutput
+    : g?.priceOutput;
   /** 以 id 定位替换单个自定义供应商（key 行 / 模型行 / 编辑弹窗共用） */
   const patchCustom = (id: string, patch: Partial<CustomProviderConfig>) => {
     if (!g) return;
@@ -660,7 +677,7 @@ export function LibraryGlobalSettingsPanel() {
                   type="number"
                   step={0.01}
                   min={0}
-                  value={g.priceInput}
+                  value={currentPriceInput ?? 0}
                   onChange={(e) => setPrice("priceInput", e.target.value)}
                 />
               </label>
@@ -671,7 +688,7 @@ export function LibraryGlobalSettingsPanel() {
                   type="number"
                   step={0.01}
                   min={0}
-                  value={g.priceCached}
+                  value={currentPriceCached ?? 0}
                   onChange={(e) => setPrice("priceCached", e.target.value)}
                 />
               </label>
@@ -682,7 +699,7 @@ export function LibraryGlobalSettingsPanel() {
                   type="number"
                   step={0.01}
                   min={0}
-                  value={g.priceOutput}
+                  value={currentPriceOutput ?? 0}
                   onChange={(e) => setPrice("priceOutput", e.target.value)}
                 />
               </label>

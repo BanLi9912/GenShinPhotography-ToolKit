@@ -35,6 +35,23 @@
 }
 
 /* 退场：向下 8px 反向淡出（与进场同速，--motion-base） */
+.ystk-toast__action {
+  pointer-events: auto;
+  margin-left: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ystk-toast__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .ystk-toast__item.is-leaving {
   opacity: 0;
   transform: translateY(var(--space-2));

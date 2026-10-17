@@ -25,6 +25,10 @@ export interface CustomProviderConfig {
   /** 该供应商当前使用的模型 id（输入 UI 复用主界面模型行——自定义供应商时该行
    *  为自由文本输入，读写本字段；MiniMax 仍走全局 model 字段） */
   model: string;
+  /** 该供应商当前模型的单价（元/1M tokens，语义同全局三字段；缺省 0 = 不计金额） */
+  priceInput?: number;
+  priceCached?: number;
+  priceOutput?: number;
 }
 
 /** 全局识图设置（缺字段时合并默认值） */
@@ -108,7 +112,15 @@ export async function loadVisionGlobal(): Promise<VisionGlobalSettings> {
   const stored = (await db.get(SETTINGS_STORE, KEY)) as
     | Partial<VisionGlobalSettings>
     | undefined;
-  const settings = { ...defaultVisionGlobal(), ...(stored ?? {}) };
+  // customProviders 逐项补价格默认 0：存量自定义供应商没有这三个字段，
+  // 防 undefined 进受控输入（React 受控警告）与金额计算（NaN）
+  const settings = {
+    ...defaultVisionGlobal(),
+    ...(stored ?? {}),
+    customProviders: ((stored?.customProviders ?? []) as CustomProviderConfig[]).map(
+      (p) => ({ priceInput: 0, priceCached: 0, priceOutput: 0, ...p }),
+    ),
+  };
   setCustomProviders(settings.customProviders);
   return settings;
 }
