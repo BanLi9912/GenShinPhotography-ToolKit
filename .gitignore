@@ -22,6 +22,9 @@ pnpm-debug.log*
 # Obsidian 文档库（任务卡/留痕/设计笔记，不入库）
 YuanSheToolKit_Obsidian/
 
+# 发布/提交流程手册（只留本地，不入库；2026-11-15 用户定）
+RELEASE.md
+
 # 编辑器与操作系统
 .obsidian/
 .idea/
