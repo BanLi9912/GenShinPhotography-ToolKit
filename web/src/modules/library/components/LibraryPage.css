@@ -306,24 +306,9 @@
   color: var(--text-1);
 }
 
-/* ---- 分析进度 chip（悬浮岛内） ---- */
-
-.lib-analysis {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  background: var(--bg-glass-soft);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-}
-
-.lib-analysis__readout {
-  font-family: var(--font-mono);
-  color: var(--text-2);
-  white-space: nowrap;
-}
+/* ---- 分析进度 chip（悬浮岛内）----
+   2026-10-24 移除 `.lib-analysis` / `.lib-analysis__readout`：扫描/分析读数迁到识图小窗，
+   工具栏不再承载动态内容（小窗内的读数样式见文件末尾 `.lib-vw__job`） */
 
 /* ---- 就绪态：虚拟瀑布网格 ---- */
 
@@ -1739,6 +1724,59 @@
   border-color: var(--accent);
 }
 
+/* 当前文件夹限定 chip（2026-10-17：文件夹树移到左侧浮层后，收起态靠它显示限定 + 再打开） */
+.lib-search__folder-chip {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px 0 var(--space-1);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-weak);
+  color: var(--accent);
+  font-size: var(--text-xs);
+}
+
+.lib-search__folder-chip-open {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 160px;
+  min-height: 26px;
+  padding: 0 var(--space-1);
+  color: inherit;
+  font-size: inherit;
+}
+
+.lib-search__folder-chip-open span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lib-search__folder-chip-open:hover {
+  color: var(--text-1);
+}
+
+.lib-search__folder-chip-clear {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font-size: var(--text-sm);
+  transition:
+    background-color var(--motion-fast),
+    color var(--motion-fast);
+}
+
+.lib-search__folder-chip-clear:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
 .lib-search__summary {
   display: flex;
   flex-wrap: wrap;
@@ -2022,48 +2060,278 @@
   color: var(--text-1);
 }
 
-.lib-filter__folder {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+/* ---- 文件夹树左侧浮层（2026-10-17 用户需求：从高级筛选迁出，贴左缘静置约 0.3 秒弹出） ----
+   抓手与浮层都用 fixed 定位：抓手压住左缘（层级高于应用壳左侧热区 19，才收得到点击、
+   滚轮也落在自己身上），浮层贴着顶栏以下、通高，右侧圆角，材质与工具栏岛一致。
+   进出场动画是用户点名的功能反馈，不随 reduced-motion 禁用（口径同 FilterBar）。 */
+
+.lib-folderdrawer__grip {
+  position: fixed;
+  left: 0;
+  /* 竖向居中于内容区（顶栏以下），高度 = 原可见竖条 72px 的 2.5 倍 = 180px
+     （2026-10-17 用户口径「检测区域高度变成现在的 2.5 倍」；贴边判定本身是整页高度，
+     这次加高的是看得见、也点得到的那根竖条与它的命中区） */
+  top: calc(var(--topbar-h) + (100vh - var(--topbar-h)) / 2);
+  transform: translateY(-50%);
+  z-index: 23;
+  display: block;
+  width: 16px; /* 命中区；可见的胶囊只有 4px */
+  height: 180px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  transition: opacity var(--motion-base);
 }
 
-.lib-filter__folder-row {
+/* 浮层展开后让位（用 opacity 而不是 display，键盘焦点落点仍存在） */
+.lib-folderdrawer__grip.is-open {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lib-folderdrawer__grip:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 999px;
+}
+
+.lib-folderdrawer__grip-track {
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+  opacity: 0.55;
+  transition:
+    opacity var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.lib-folderdrawer__grip:hover .lib-folderdrawer__grip-track,
+.lib-folderdrawer__grip:focus-visible .lib-folderdrawer__grip-track {
+  opacity: 1;
+  background: var(--accent-weak);
+}
+
+/* 已限定某个文件夹：抓手描一圈 accent 常亮，收起后也看得出来「筛选还开着」。
+   必须描边、不能实心 accent——实心与「计时填满 100%」长得一模一样，收起后会被看成
+   「进度条卡在顶满」（2026-10-17 用户报）；改描边之后，「满格」只剩计时这一种含义。 */
+.lib-folderdrawer__grip.is-active .lib-folderdrawer__grip-track {
+  opacity: 1;
+  background: var(--accent-weak);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* 静置计时进度：高度从 0 涨到 100%。**时长由 FolderDrawer 的 DWELL_MS 内联注入**
+   （`style={{ animationDuration }}`），这里只给曲线与填充模式，免得两处各写一份 */
+.lib-folderdrawer__grip-fill {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 0;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+/* 计时中把轨道提到全不透明：指针多半停在边缘某处（并不压在胶囊上），进度不该被
+   静息态的 0.55 透明度冲淡；也保证「已限定」状态下进度条仍然看得见 */
+.lib-folderdrawer__grip.is-arming .lib-folderdrawer__grip-track {
+  opacity: 1;
+}
+
+.lib-folderdrawer__grip.is-arming .lib-folderdrawer__grip-fill {
+  animation: lib-folderdrawer-arm linear forwards;
+}
+
+@keyframes lib-folderdrawer-arm {
+  from {
+    height: 0;
+  }
+
+  to {
+    height: 100%;
+  }
+}
+
+.lib-folderdrawer {
+  position: fixed;
+  left: 0;
+  top: var(--topbar-h);
+  bottom: 0;
+  z-index: 22; /* 热区/筛选浮层(19)、工具栏(20) 之上，多选小窗(30)/详情(40) 之下 */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 288px;
+  max-width: calc(100vw - var(--space-8));
+  padding: var(--space-3) var(--space-3) var(--space-4) var(--space-5);
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--line);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  animation: lib-folderdrawer-in var(--motion-base);
+}
+
+.lib-folderdrawer.is-leaving {
+  animation: lib-folderdrawer-out var(--motion-base) forwards;
+  pointer-events: none;
+}
+
+@keyframes lib-folderdrawer-in {
+  from {
+    transform: translateX(-16px);
+    opacity: 0;
+  }
+}
+
+@keyframes lib-folderdrawer-out {
+  to {
+    transform: translateX(-16px);
+    opacity: 0;
+  }
+}
+
+.lib-folderdrawer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 24px;
+  padding-left: var(--space-2);
+}
+
+.lib-folderdrawer__title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.lib-folderdrawer__close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: var(--text-md);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.lib-folderdrawer__close:hover {
+  color: var(--text-1);
+  background: var(--accent-weak);
+}
+
+.lib-folderdrawer__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding-right: var(--space-1);
+  overflow-y: auto;
+  overscroll-behavior: contain; /* 树内滚到底不连累页面（页面滚动会把浮层当"其它操作"收起） */
+}
+
+.lib-folderdrawer__row {
   display: flex;
   align-items: center;
   gap: var(--space-1);
 }
 
-.lib-filter__folder-caret {
+.lib-folderdrawer__caret {
   display: grid;
   place-items: center;
   width: 18px;
-  height: 22px;
+  height: 24px;
+  border-radius: var(--radius-sm);
   color: var(--text-3);
   font-size: var(--text-xs);
 }
 
-.lib-filter__folder-caret--empty {
-  pointer-events: none;
-}
-
-.lib-filter__folder-name {
-  min-height: 22px;
-  padding: 0 var(--space-1);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-  color: var(--text-2);
-  text-align: left;
-}
-
-.lib-filter__folder-name:hover {
+.lib-folderdrawer__caret:hover {
   color: var(--text-1);
   background: var(--accent-weak);
 }
 
-.lib-filter__folder-name.is-active {
+.lib-folderdrawer__caret--empty {
+  pointer-events: none;
+}
+
+.lib-folderdrawer__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.lib-folderdrawer__name:hover {
+  color: var(--text-1);
+  background: var(--accent-weak);
+}
+
+.lib-folderdrawer__name.is-active {
   background: var(--accent);
   color: var(--on-accent);
+}
+
+.lib-folderdrawer__empty {
+  padding: var(--space-2);
+  color: var(--text-2); /* 提示文案按 WCAG AA 取次级文字色（--text-3 在深色玻璃上不足 4.5:1） */
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.lib-folderdrawer__foot {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line);
+}
+
+.lib-folderdrawer__hint {
+  color: var(--text-2);
+  font-size: var(--text-xs);
+}
+
+.lib-folderdrawer__clear {
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-size: var(--text-xs);
+}
+
+.lib-folderdrawer__clear:hover {
+  border-color: var(--accent);
+  color: var(--text-1);
+}
+
+.lib-folderdrawer__grip:focus-visible,
+.lib-folderdrawer__close:focus-visible,
+.lib-folderdrawer__caret:focus-visible,
+.lib-folderdrawer__name:focus-visible,
+.lib-folderdrawer__clear:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .lib-filter__switch {
@@ -3034,6 +3302,26 @@
 /* 完成无失败：进度条绿（2026-08-21 用户反馈口径沿用） */
 .lib-vw__bar > span.is-ok {
   background: var(--success);
+}
+
+/* ---- 图库任务进度（扫描 / 分析；2026-10-24 从工具栏读数迁入） ----
+   工具栏读数会随数字跳动改导航栏宽度（用户口径要"导航栏上无动态信息"），小窗定宽 + 本行
+   ellipsis 吃下任意长度读数；总量进度仍统一由贴底 2px bar 表达，不另造第二条进度条 */
+.lib-vw__job {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.lib-vw__job-text {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* body 展开动效：grid-template-rows 0fr→1fr + opacity（不裁切卡片阴影，任务卡钉死方案）；

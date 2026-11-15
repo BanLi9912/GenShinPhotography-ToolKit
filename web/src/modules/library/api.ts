@@ -15,6 +15,11 @@ export { LibraryRegistryPanel } from "./components/LibraryRegistryPanel";
 export { useLibraryStore } from "./store";
 export { ensureEntryPermission, getEntry, listSummaries } from "./index/binding";
 export type { LibraryRegistryEntry } from "./index/binding";
+/**
+ * 浏览器拖拽采集桥（2026-11-12 任务卡）：应用壳在 App 的 effect 里挂载/清理，
+ * 采集只落盘不触发扫描——接收端实现全部在 `collector/`，不从这里再导出内部。
+ */
+export { startCollectorBridge } from "./collector/bridge";
 
 /** 应用内拖拽的自定义类型（M3.6）：payload 只带条目标识，落地方经本文件回取 File */
 export const LIBRARY_DRAG_MIME = "application/x-ystk-library-items";

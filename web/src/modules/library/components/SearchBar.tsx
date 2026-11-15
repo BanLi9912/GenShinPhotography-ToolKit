@@ -1,7 +1,8 @@
 /**
  * M3.4 搜索行（悬浮工具栏岛第二行）：搜索框 + 150ms 防抖、补全下拉
  * （历史 + tag 语料）、标星筛选按钮、温度滑杆（0–5，档名点击循环
- * 精准→平衡→联想）、高级筛选按钮。
+ * 精准→平衡→联想）、当前文件夹限定 chip（2026-10-17：文件夹树移到左侧浮层后，
+ * 收起态靠这枚 chip 显示限定并可再打开浮层）、高级筛选按钮。
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -9,6 +10,25 @@ import { toast } from "../../../ui/toast";
 import { extractImageQueryFeatures } from "../search/imageQuery";
 import { getSuggestions, pushHistory } from "../search/suggest";
 import { useLibraryStore } from "../store";
+
+/** 文件夹 chip 的图标（stroke 风格内联 SVG，不引图标库） */
+function FolderIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.6.8l.9 1.2H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    </svg>
+  );
+}
 
 const TEMP_LABEL = ["精准", "精准", "平衡", "平衡", "联想", "联想"];
 const TEMP_CYCLE = [0, 3, 5];
@@ -23,6 +43,11 @@ export function SearchBar() {
   const setTemperature = useLibraryStore((s) => s.setTemperature);
   const filterOpen = useLibraryStore((s) => s.filterOpen);
   const setFilterOpen = useLibraryStore((s) => s.setFilterOpen);
+  /** 当前文件夹限定（文件夹树已迁到左侧浮层；收起后靠 chip 显示 + 清除） */
+  const folderScope = useLibraryStore((s) => s.folderScope);
+  const setFolderScope = useLibraryStore((s) => s.setFolderScope);
+  const folderDrawerOpen = useLibraryStore((s) => s.folderDrawerOpen);
+  const setFolderDrawerOpen = useLibraryStore((s) => s.setFolderDrawerOpen);
   const setSearchFocused = useLibraryStore((s) => s.setSearchFocused);
   const starredOnly = useLibraryStore((s) => s.starredOnly);
   const setStarredOnly = useLibraryStore((s) => s.setStarredOnly);
@@ -302,6 +327,30 @@ export function SearchBar() {
           {TEMP_LABEL[temperature]}
         </button>
       </div>
+      {folderScope != null && (
+        /* 文件夹限定 chip：浮层收起后仍能一眼看到「只在某个目录里筛」，点开可回浮层换目录 */
+        <span className="lib-search__folder-chip">
+          <button
+            type="button"
+            className="lib-search__folder-chip-open"
+            title={`文件夹筛选：${folderScope}（点开文件夹浮层）`}
+            aria-expanded={folderDrawerOpen}
+            onClick={() => setFolderDrawerOpen(!folderDrawerOpen)}
+          >
+            <FolderIcon />
+            <span>{folderScope.split("/").pop()}</span>
+          </button>
+          <button
+            type="button"
+            className="lib-search__folder-chip-clear"
+            aria-label="清除文件夹筛选"
+            title="清除文件夹筛选"
+            onClick={() => setFolderScope(null)}
+          >
+            ×
+          </button>
+        </span>
+      )}
       <button
         type="button"
         className={"lib-toolbar__btn" + (filterOpen ? " lib-toolbar__btn--primary" : "")}

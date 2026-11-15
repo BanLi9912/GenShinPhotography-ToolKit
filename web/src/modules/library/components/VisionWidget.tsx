@@ -18,6 +18,10 @@
  * 确认/取消就在清单底部，用户在确认前即可逐张查看）；任务列表行与缺口行整行可点开
  * 详情；非运行态下 ✕ 删除由 store 帧删除承担。
  * z-index 18：网格之上、设置浮层 19 之下（详情覆盖层打开时被盖住可接受）。
+ * 2026-10-24（用户口径）：参考图库工具栏不再有动态信息——「扫描图库」「缩略图/分析」的
+ * 进度读数（含速度/预计剩余/失败数）与分析的暂停/继续一并迁到本小窗：收起态 header 一行
+ * 短读数 + 贴底 2px 进度条（认当前活动：识图队列运行中 → 图库任务 → 识图静态值），展开态
+ * body 顶部给全文读数与暂停/继续。工具栏读数会随数字跳动改导航栏宽度，小窗定宽不受影响。
  * errors 只活在本轮内存（刷新即失，不落盘——禁区见任务卡 §5）。
  */
 
@@ -37,6 +41,14 @@ import {
 
 /** 「重试失败项」split 钮范围选项（M3.5.3.4；当前仅「全库」，数组驱动预留如「本轮」） */
 const RETRY_SCOPES = [{ id: "all", label: "全库" }] as const;
+
+/** 分析预计剩余格式化：null（速度未知）→ —，<60s → N 秒，否则 N 分
+ *  （2026-10-24 从 LibraryPage 原样搬入：图库任务读数已迁到本小窗） */
+function formatEta(seconds: number | null): string {
+  if (seconds === null) return "—";
+  if (seconds < 60) return `${seconds} 秒`;
+  return `${Math.round(seconds / 60)} 分`;
+}
 
 /** M3.5.3.6 小窗内确认视图请求（四处确认共用：新增图片/批量识图/重试失败项/全部重跑） */
 type QueueConfirmRequest = {
@@ -65,9 +77,58 @@ export function VisionWidget() {
   const items = useLibraryStore((s) => s.items);
   const rerunVisionAll = useLibraryStore((s) => s.rerunVisionAll);
   const enqueueGapRerun = useLibraryStore((s) => s.enqueueGapRerun);
+  /** 图库本地任务进度（扫描 / 分析）：2026-10-24 从参考图库工具栏迁入本小窗——
+   *  工具栏读数随数字跳动会改导航栏宽度，小窗定宽（240/300px）+ 文本 ellipsis 不会抖 */
+  const scan = useLibraryStore((s) => s.scan);
+  const analysis = useLibraryStore((s) => s.analysis);
+  const pauseAnalysis = useLibraryStore((s) => s.pauseAnalysis);
+  const resumeAnalysis = useLibraryStore((s) => s.resumeAnalysis);
 
   const { running, total, done, failed, cost, errors, blockedReason, tasks, abortReason } =
     vision;
+  /** 图库本地任务（扫描优先）：分析队列在扫描收尾后才启动（store.ts finishScan），
+   *  两者实际不会同时跑，这里只是防御性优先顺序 */
+  const jobKind: "scan" | "analysis" | null = scan.running
+    ? "scan"
+    : analysis.running
+      ? "analysis"
+      : null;
+  /** 任务进度百分比（total 未知时 0，读数照常显示已处理张数） */
+  const jobPct =
+    jobKind === "scan"
+      ? scan.total > 0
+        ? Math.min(100, Math.round((scan.done / scan.total) * 100))
+        : 0
+      : jobKind === "analysis"
+        ? analysis.total > 0
+          ? Math.min(100, Math.round((analysis.done / analysis.total) * 100))
+          : 0
+        : 0;
+  /** 收起态 header 短读数（240px 内放得下；全文见 jobDetail） */
+  const jobPill =
+    jobKind === "scan"
+      ? scan.total > 0
+        ? `扫描图库 ${scan.done}/${scan.total}`
+        : `扫描图库 · 已扫 ${scan.done} 张`
+      : jobKind === "analysis"
+        ? `${analysis.stage === "thumbs" ? "缩略图" : "分析"} ${analysis.done}/${analysis.total}` +
+          (analysis.paused ? " · 已暂停" : "")
+        : "";
+  /** 展开态全文读数（文案逐字沿用原工具栏读数：速度 / 预计剩余 / 失败数） */
+  const jobDetail =
+    jobKind === "scan"
+      ? `${
+          scan.total > 0
+            ? `扫描图库 ${scan.done}/${scan.total} 张`
+            : `扫描图库 · 已扫 ${scan.done} 张`
+        } · ${scan.perSecond} 张/秒`
+      : jobKind === "analysis"
+        ? `${analysis.stage === "thumbs" ? "缩略图" : "分析"} ${analysis.done}/${analysis.total} · ${
+            analysis.perSecond
+          } 张/秒 · 约 ${formatEta(analysis.etaSeconds)}` +
+          (analysis.failed > 0 ? ` · ${analysis.failed} 张失败` : "") +
+          (analysis.paused ? " · 已暂停" : "")
+        : "";
   /** 「重试失败项」split 钮（M3.5.3.4）：范围小菜单开合/锚点（2026-09-03 用户口径：
    *  范围选项显示在主钮下方——改为普通下拉，不再上翻） */
   const [retryMenuOpen, setRetryMenuOpen] = useState(false);
@@ -102,9 +163,16 @@ export function VisionWidget() {
     () => visionTodoIds.pending.filter((id) => !excludedIds.has(id)),
     [visionTodoIds, excludedIds],
   );
-  /** 本轮任务全部完成且无失败（2026-08-21 用户反馈口径：完成态绿点/绿文本/绿进度条） */
+  /** 本轮任务全部完成且无失败（2026-08-21 用户反馈口径：完成态绿点/绿文本/绿进度条）。
+   *  jobKind 非空时本轮尚未收工（重扫/重分析中），不显示完成态绿色 */
   const allDoneOk =
-    !running && !blockedReason && !visionPending && total > 0 && done + failed === total && failed === 0;
+    jobKind === null &&
+    !running &&
+    !blockedReason &&
+    !visionPending &&
+    total > 0 &&
+    done + failed === total &&
+    failed === 0;
   /** 「重试失败项」显示条件（errors 本轮内存或 -1 跳过标记，回落通道） */
   const canRetry = errors.length > 0 || hasSkipped;
   /** 预算限额暂停态（blockedReason 由预算触发）——blocked 分支主操作文案用「继续识图」 */
@@ -114,9 +182,15 @@ export function VisionWidget() {
   /** M3.5.3.3：列表 = 未完成（running/waiting/failed）全量，done 行不渲染（header 已有
    *  计数与失败数，done 逐行无信息增量）；全量简单 DOM、不做虚拟化（数百~数千行可接受） */
   const visibleTasks = tasks.filter((t) => t.status !== "done");
+  // 2026-10-24：扫描/分析运行中也要显示（进度已从工具栏迁到这里）
   const visible =
     !visionDismissed &&
-    (running || total > 0 || blockedReason !== null || visionPending || visionBatchRequest !== null);
+    (jobKind !== null ||
+      running ||
+      total > 0 ||
+      blockedReason !== null ||
+      visionPending ||
+      visionBatchRequest !== null);
   // 新图库识图确认 / 批量识图确认：自动展开详情（确认按钮在 body 操作区）
   useEffect(() => {
     if (visionPending || visionBatchRequest !== null) setVisionWidgetOpen(true);
@@ -160,7 +234,16 @@ export function VisionWidget() {
 
   if (!visible) return null;
 
-  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  /** 贴底 2px 进度条读数：识图队列运行中 → 当前图库任务（扫描/分析）→ 识图队列静态值 */
+  const pct = running
+    ? total > 0
+      ? Math.min(100, Math.round((done / total) * 100))
+      : 0
+    : jobKind !== null
+      ? jobPct
+      : total > 0
+        ? Math.min(100, Math.round((done / total) * 100))
+        : 0;
 
   // header 文本（M3.5.3.2 §4.4 逐字表：一行整合状态+计数+金额；金额 toFixed(2)）
   const amount = cost.amount.toFixed(2);
@@ -169,10 +252,14 @@ export function VisionWidget() {
     pillText = `批量识图待确认 · ${visionBatchRequest.ids.length} 张`;
   } else if (visionPending) {
     pillText = "待识图确认";
-  } else if (blockedReason) {
-    pillText = "识图未启动";
   } else if (running) {
     pillText = `识图中 ${done}/${total} · ¥${amount}`;
+  } else if (jobKind !== null) {
+    // 图库任务（扫描/分析）进行中优先于 blocked 与陈旧完成态：重扫/重分析时不该还显示
+    // 上一轮「已识图 N/M」或上一轮残留的「识图未启动」
+    pillText = jobPill;
+  } else if (blockedReason) {
+    pillText = "识图未启动";
   } else if (done + failed < total) {
     // M3.5.3.4：中止态带原因（「已中止 · <abortReason>」）；无原因维持现状文案
     pillText = abortReason
@@ -189,10 +276,10 @@ export function VisionWidget() {
     pillText = `已识图 ${visionCount}/${items.length} · ¥${amount}`;
   }
 
-  // 状态点：批量确认/新库 pending 无类（accent）/ running 脉动 / 失败或 blocked 红 / 其余绿
+  // 状态点：批量确认/新库 pending 无类（accent）/ running 或图库任务脉动 / 失败或 blocked 红 / 其余绿
   const dotCls = visionBatchRequest !== null || visionPending
     ? ""
-    : running
+    : running || jobKind !== null
       ? " is-running"
       : failed > 0 || blockedReason
         ? " is-error"
@@ -369,6 +456,38 @@ export function VisionWidget() {
         <span className={"lib-vw__text" + (allDoneOk ? " is-ok" : "")}>
           {pillText}
         </span>
+        {/* 图库分析进行中：暂停/继续（原来在工具栏读数旁，2026-10-24 随读数迁入；
+            点钮不触发展开/收起，故 stopPropagation） */}
+        {jobKind === "analysis" && (
+          <button
+            type="button"
+            className="lib-vw__icon-btn"
+            title={analysis.paused ? "继续分析" : "暂停分析"}
+            aria-label={analysis.paused ? "继续分析" : "暂停分析"}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (analysis.paused) resumeAnalysis();
+              else pauseAnalysis();
+            }}
+          >
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              {analysis.paused ? (
+                <path d="M8 5v14l11-7z" />
+              ) : (
+                <>
+                  <rect x="6" y="4" width="4" height="16" rx="1" />
+                  <rect x="14" y="4" width="4" height="16" rx="1" />
+                </>
+              )}
+            </svg>
+          </button>
+        )}
         {running && (
           <button
             type="button"
@@ -419,6 +538,25 @@ export function VisionWidget() {
       <div className="lib-vw__body" aria-hidden={!visionWidgetOpen}>
         <div className="lib-vw__body-clip">
           <div className="lib-vw__body-inner">
+            {/* 图库任务进度（扫描 / 分析；2026-10-24 从工具栏读数迁入）：收起态看 header
+                短读数 + 贴底细条，展开态在这里看全文（速度/预计剩余/失败数）并能停/继续。
+                扫描不提供暂停：后台重扫不支持（store.ts rescan 注释） */}
+            {jobKind !== null && (
+              <div className="lib-vw__job">
+                <span className="lib-vw__job-text" title={jobDetail}>
+                  {jobDetail}
+                </span>
+                {jobKind === "analysis" && (
+                  <button
+                    type="button"
+                    className="lib-vw__text-btn"
+                    onClick={analysis.paused ? resumeAnalysis : pauseAnalysis}
+                  >
+                    {analysis.paused ? "继续" : "暂停"}
+                  </button>
+                )}
+              </div>
+            )}
             {/* M3.5.3.5 扫描缺口结果视图：缺口视图时替换常态内容（任务/操作区），
                 底部按钮「全部入队 + 返回」；foot「关闭」仍常显 */}
             {gapResult === null ? (

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>拖拽采集自测页（离线）</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, "Microsoft YaHei", sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 32px;
+        background: #f4f4f6;
+        color: #1c1c20;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 8px;
+      }
+      p {
+        margin: 0 0 16px;
+        font-size: 14px;
+        color: #56565e;
+        max-width: 720px;
+        line-height: 1.6;
+      }
+      .grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+      }
+      figure {
+        margin: 0;
+        padding: 12px;
+        background: #ffffff;
+        border: 1px solid rgb(28 28 32 / 10%);
+        border-radius: 8px;
+      }
+      img {
+        display: block;
+        width: 160px;
+        height: 120px;
+        object-fit: cover;
+        cursor: grab;
+        border-radius: 4px;
+        background: #e6e6ea;
+      }
+      figcaption {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #8e8e96;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>拖拽采集自测页</h1>
+    <p>
+      本页不联网、不引第三方资源：图片由 <code>drag-demo.js</code> 用 canvas 现场画成
+      <code>data:image/…</code>，用来验证「拖图 → 浮层 → 投放当前目录/子目录」这条链路。
+      真实 http(s) 图片请去普通网页测（登录墙/防盗链也是真实场景的一部分）。
+    </p>
+    <div class="grid">
+      <figure>
+        <img id="demo-a" alt="演示图 A" />
+        <figcaption>演示图 A（PNG）</figcaption>
+      </figure>
+      <figure>
+        <img id="demo-b" alt="演示图 B" />
+        <figcaption>演示图 B（PNG）</figcaption>
+      </figure>
+      <figure>
+        <img id="demo-c" alt="演示图 C" />
+        <figcaption>演示图 C（PNG）</figcaption>
+      </figure>
+    </div>
+    <script src="drag-demo.js"></script>
+  </body>
+</html>

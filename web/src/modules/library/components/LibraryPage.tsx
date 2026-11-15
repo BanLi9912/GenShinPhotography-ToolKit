@@ -28,6 +28,7 @@ import { BatchPanel } from "./BatchPanel";
 import { CrossHint, CrossResults } from "./CrossResults";
 import { DetailView } from "./DetailView";
 import { FilterBar } from "./FilterBar";
+import { FolderDrawer } from "./FolderDrawer";
 import { LibraryQuickList } from "./LibraryQuickList";
 import { OverviewGrid } from "./OverviewGrid";
 import { SearchBar } from "./SearchBar";
@@ -208,13 +209,6 @@ function FolderIcon() {
   );
 }
 
-/** 分析预计剩余格式化：null（速度未知）→ —，<60s → N 秒，否则 N 分 */
-function formatEta(seconds: number | null): string {
-  if (seconds === null) return "—";
-  if (seconds < 60) return `${seconds} 秒`;
-  return `${Math.round(seconds / 60)} 分`;
-}
-
 export function LibraryPage() {
   const phase = useLibraryStore((s) => s.phase);
   const libraries = useLibraryStore((s) => s.libraries);
@@ -223,7 +217,6 @@ export function LibraryPage() {
   const cross = useLibraryStore((s) => s.cross);
   const items = useLibraryStore((s) => s.items);
   const scan = useLibraryStore((s) => s.scan);
-  const analysis = useLibraryStore((s) => s.analysis);
   const settingsOpen = useLibraryStore((s) => s.settingsOpen);
   const setSettingsOpen = useLibraryStore((s) => s.setSettingsOpen);
   const init = useLibraryStore((s) => s.init);
@@ -234,8 +227,6 @@ export function LibraryPage() {
   const rescan = useLibraryStore((s) => s.rescan);
   const pauseScan = useLibraryStore((s) => s.pauseScan);
   const resumeScan = useLibraryStore((s) => s.resumeScan);
-  const pauseAnalysis = useLibraryStore((s) => s.pauseAnalysis);
-  const resumeAnalysis = useLibraryStore((s) => s.resumeAnalysis);
   const sortKey = useLibraryStore((s) => s.sortKey);
   const sortDir = useLibraryStore((s) => s.sortDir);
   const selectMode = useLibraryStore((s) => s.selectMode);
@@ -1160,40 +1151,9 @@ export function LibraryPage() {
             </span>
           </div>
           <div className="lib-toolbar__actions">
-            {phase === "ready" && scan.running && (
-              <div className="lib-analysis">
-                <span className="lib-analysis__readout">
-                  扫描中 {scan.done} 张
-                </span>
-              </div>
-            )}
-            {analysis.running && (
-              <div className="lib-analysis">
-                <span className="lib-analysis__readout">
-                  {analysis.stage === "thumbs" ? "缩略图" : "分析"}{" "}
-                  {analysis.done}/{analysis.total} · {analysis.perSecond} 张/秒 ·
-                  约 {formatEta(analysis.etaSeconds)}
-                  {analysis.failed > 0 ? ` · ${analysis.failed} 张失败` : ""}
-                </span>
-                {analysis.paused ? (
-                  <button
-                    type="button"
-                    className="lib-toolbar__btn"
-                    onClick={resumeAnalysis}
-                  >
-                    继续
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="lib-toolbar__btn"
-                    onClick={pauseAnalysis}
-                  >
-                    暂停
-                  </button>
-                )}
-              </div>
-            )}
+            {/* 2026-10-24 用户口径：工具栏**不放任何动态读数**（扫描/分析进度随数字跳动会改
+                导航栏宽度、把右侧按钮挤得左右漂移）——扫描/分析进度已迁到右下角识图小窗
+                （见 VisionWidget），工具栏只留静态控件 */}
             <button
               type="button"
               className={
@@ -1282,6 +1242,8 @@ export function LibraryPage() {
         <SearchBar />
       </div>
       <FilterBar />
+      {/* 文件夹树左侧浮层（2026-10-17 从高级筛选迁出）：贴左缘静止片刻自动弹出 */}
+      <FolderDrawer />
       <SettingsPanel toolbarRef={toolbarRef} />
       <VisionWidget />
       <CrossHint />
