@@ -1,3 +1,4 @@
+import { createLibraryBackupStore } from "./server/libraryBackup.js";
 import { execFile, spawn } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, statSync } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -1074,206 +1075,56 @@ function serveDevLog(): Plugin {
  *     → 与 manifest.json 比对 → { ok, changed }
  *   POST /api/backup/commit { libraryId, name, files:[{path,base64}],
  *                            manifest:[{path,mtime,size}] }
- *     → 两阶段写 devdata/backup/<libId>/latest/（覆盖式只留一代）
+ *     → 写 devdata/backup/<库名>--<libId>/latest/，另留两代 history
  *
  * 变更判定保守：size 或 mtime 任一不同即算变更——宁可多拷一代也不漏
  * 备份（云盘 mtime 抖动最多导致多一次拷贝，无正确性问题）。
- * 两阶段：先写全 latest.new/，全部成功后删旧 latest/ 再改名——
- * 避免半新半旧的混合代。
+ * 完整暂存代 → 旧代改名归档 → 新代发布；失败回滚，中断后从历史恢复。
+ * 实现见 server/libraryBackup.ts；旧格式目录不自动迁移或删除。
  * ------------------------------------------------------------------ */
 
-/** 备份文件名白名单（与浏览器侧 BACKUP_FILES 一致） */
-const BACKUP_FILE_NAMES = new Set(["meta.json", "index.json", "vectors.bin"]);
-/** commit body 上限（B）：index.json 几十 MB，base64 后 +33%，留足 */
+/** 请求体按实际字节设上限，超限后不再累积后续 chunk。 */
 const BACKUP_BODY_LIMIT = 256 * 1024 * 1024;
-
-interface BackupCheckBody {
-  libraryId?: unknown;
-  /** 图库本名（用于备份目录名；清洗不可用则回退 libraryId） */
-  name?: unknown;
-  files?: unknown;
-}
-
-interface BackupCommitBody {
-  libraryId?: unknown;
-  name?: unknown;
-  files?: unknown;
-  manifest?: unknown;
-}
-
-/** 大上限 body reader（check/commit 共用；不动既有 readJsonBody/readDevLogBody） */
 function readLargeBody(req: {
   on: (e: string, cb: (chunk?: unknown) => void) => void;
 }): Promise<string> {
-  return new Promise((promiseResolve, promiseReject) => {
-    let raw = "";
+  return new Promise((resolveBody, reject) => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let rejected = false;
     req.on("data", (chunk) => {
-      raw += String(chunk ?? "");
-      if (raw.length > BACKUP_BODY_LIMIT) promiseReject(new Error("body too large"));
+      if (rejected) return;
+      const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk ?? ""));
+      bytes += data.length;
+      if (bytes > BACKUP_BODY_LIMIT) {
+        rejected = true;
+        chunks.length = 0;
+        reject(new Error("body too large"));
+      } else chunks.push(data);
     });
-    req.on("end", () => promiseResolve(raw));
-    req.on("error", () => promiseReject(new Error("read error")));
+    req.on("end", () => { if (!rejected) resolveBody(Buffer.concat(chunks).toString("utf8")); });
+    req.on("error", () => reject(new Error("read error")));
   });
-}
-
-/** libraryId 校验（binding.randomLibraryId 固定格式 lib_ + 8 位 hex，防路径穿越） */
-function isLibraryId(v: unknown): v is string {
-  return typeof v === "string" && /^lib_[0-9a-f]{8}$/.test(v);
-}
-
-/**
- * 备份目录名 = 图库本名（用户 2026-09-24 口径：不要 lib_xxxxxxxx 哈希目录）。
- * 库名是用户可控字符串（源自目录句柄的 name），落成路径前必须清洗：
- * 去路径分隔符与 Windows 保留字符、归一空白、去首尾点/空格、限长 64。
- * 清洗后为空、全点号（`.` / `..`）或命中 Windows 设备名（CON/PRN/AUX/NUL/COM1…）
- * 时返回 null —— 调用方回退用 libraryId 作目录名（宁可丑，不可危险）。
- */
-function safeDirName(raw: unknown): string | null {
-  if (typeof raw !== "string") return null;
-  let s = raw
-    // 路径分隔符先打掉，杜绝 "../../x" 之类
-    .replace(/[\\/]/g, "-")
-    // Windows 保留字符
-    .replace(/[<>:"|?*]/g, "")
-    // 控制字符（C0 + DEL）逐个按码点剔除：用字符类写会触发 oxlint no-control-regex
-    .split("")
-    .filter((ch) => {
-      const code = ch.codePointAt(0) ?? 0;
-      return code > 0x1f && code !== 0x7f;
-    })
-    .join("")
-    .replace(/\s+/g, " ")
-    .trim()
-    // Windows 不允许目录名以点或空格结尾（首部点也一并去，避免隐藏目录与 ".." 变体）
-    .replace(/^[.\s]+/, "")
-    .replace(/[.\s]+$/, "");
-  if (s.length > 64) s = s.slice(0, 64).replace(/[.\s]+$/, "");
-  if (!s || /^\.+$/.test(s)) return null;
-  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(s)) return null;
-  return s;
-}
-
-/** 校验并整理清单：[{path,mtime,size}]（path 白名单；mtime/size 必须是有限数） */
-function parseManifestFiles(v: unknown): Array<{ path: string; mtime: number; size: number }> | null {
-  if (!Array.isArray(v)) return null;
-  const out: Array<{ path: string; mtime: number; size: number }> = [];
-  for (const item of v) {
-    if (typeof item !== "object" || item === null) return null;
-    const path = (item as { path?: unknown }).path;
-    const mtime = (item as { mtime?: unknown }).mtime;
-    const size = (item as { size?: unknown }).size;
-    if (
-      typeof path !== "string" || !BACKUP_FILE_NAMES.has(path) ||
-      typeof mtime !== "number" || !Number.isFinite(mtime) ||
-      typeof size !== "number" || !Number.isFinite(size)
-    ) {
-      return null;
-    }
-    out.push({ path, mtime, size });
-  }
-  return out;
-}
-
-/** 校验 commit 的文件负载：[{path,base64}]（path 白名单；base64 必须是非空字符串） */
-function parsePayloadFiles(v: unknown): Array<{ path: string; base64: string }> | null {
-  if (!Array.isArray(v)) return null;
-  const out: Array<{ path: string; base64: string }> = [];
-  for (const item of v) {
-    if (typeof item !== "object" || item === null) return null;
-    const path = (item as { path?: unknown }).path;
-    const base64 = (item as { base64?: unknown }).base64;
-    if (typeof path !== "string" || !BACKUP_FILE_NAMES.has(path)) return null;
-    if (typeof base64 !== "string") return null;
-    out.push({ path, base64 });
-  }
-  return out;
 }
 
 function serveYstkBackup(): Plugin {
   return {
     name: "serve-ystk-backup",
     configureServer(server: ViteDevServer) {
+      const backups = createLibraryBackupStore(resolve(DEVLOG_DIR, "backup"));
       server.middlewares.use((req, res, next) => {
         const pathname = (req.url ?? "").split("?")[0];
-        if (pathname !== "/api/backup/check" && pathname !== "/api/backup/commit") {
-          return next();
-        }
+        if (pathname !== "/api/backup/check" && pathname !== "/api/backup/commit") return next();
         if (req.method !== "POST") {
           sendJson(res, 405, { ok: false, error: "仅支持 POST" });
           return;
         }
         void (async () => {
-          let body: BackupCheckBody & BackupCommitBody;
           try {
-            body = JSON.parse(await readLargeBody(req)) as BackupCheckBody & BackupCommitBody;
-          } catch {
-            sendJson(res, 400, { ok: false, error: "请求体不是合法 JSON" });
-            return;
-          }
-          if (!isLibraryId(body.libraryId)) {
-            sendJson(res, 400, { ok: false, error: "libraryId 非法" });
-            return;
-          }
-          // 目录名优先用图库本名（清洗后）；不可用则回退 libraryId
-          const dirName = safeDirName(body.name) ?? body.libraryId;
-          const libDir = resolve(DEVLOG_DIR, "backup", dirName);
-
-          if (pathname === "/api/backup/check") {
-            const files = parseManifestFiles(body.files);
-            if (!files) {
-              sendJson(res, 400, { ok: false, error: "files 清单非法" });
-              return;
-            }
-            let changed = true;
-            try {
-              const raw = await readFile(resolve(libDir, "manifest.json"), "utf8");
-              const manifest = JSON.parse(raw) as {
-                files?: Array<{ path: string; mtime: number; size: number }>;
-              };
-              const prev = manifest.files;
-              // 保守比对：清单长度或任一文件的 size/mtime 不同即变更
-              changed =
-                !Array.isArray(prev) ||
-                prev.length !== files.length ||
-                files.some((f) => {
-                  const p = prev.find((x) => x.path === f.path);
-                  return !p || p.size !== f.size || p.mtime !== f.mtime;
-                });
-            } catch {
-              /* manifest 不存在/损坏 → 首次备份，changed 保持 true */
-            }
-            sendJson(res, 200, { ok: true, changed, dir: dirName });
-            return;
-          }
-
-          // ---- commit ----
-          const name = typeof body.name === "string" ? body.name : "";
-          // 注意：files 装的是 {path,base64} 负载，不能用 parseManifestFiles 校验
-          const payloads = parsePayloadFiles(body.files);
-          const manifest = parseManifestFiles(body.manifest);
-          if (!payloads || !manifest || payloads.length === 0) {
-            sendJson(res, 400, { ok: false, error: "files/manifest 清单非法" });
-            return;
-          }
-          try {
-            const staging = resolve(libDir, "latest.new");
-            const latest = resolve(libDir, "latest");
-            await rm(staging, { recursive: true, force: true });
-            await mkdir(staging, { recursive: true });
-            for (const item of payloads) {
-              await writeFile(resolve(staging, item.path), Buffer.from(item.base64, "base64"));
-            }
-            await rm(latest, { recursive: true, force: true });
-            await rename(staging, latest);
-            await writeFile(
-              resolve(libDir, "manifest.json"),
-              JSON.stringify({ at: Date.now(), libraryId: body.libraryId, name, files: manifest }, null, 2),
-              "utf8",
-            );
-            sendJson(res, 200, {
-              ok: true,
-              dir: `devdata/backup/${dirName}/latest`,
-            });
+            const body: unknown = JSON.parse(await readLargeBody(req));
+            if (!body || typeof body !== "object") throw new Error("请求体不是合法对象");
+            const result = await backups.run(body, pathname === "/api/backup/commit");
+            sendJson(res, 200, result);
           } catch (err) {
             sendJson(res, 500, { ok: false, error: (err as Error).message });
           }

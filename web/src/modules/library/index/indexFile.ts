@@ -14,7 +14,7 @@
  * 7. 2026-09-17 数据丢失修复增补三条：**读失败防御**（激活时 index.json 读失败
  *    一律中止打开，绝不让空 Map 上线覆盖磁盘）；**外部变更哨兵**（激活后文件被
  *    外部改动则保存前发现即中止本次保存并提示刷新，保住用户的备份恢复流程）；
- *    **save 序守卫**（守卫放行的旧快照在写入前自查已过时则放弃，防盘上回卷）。
+ *    **保存串行锁**（超时只结束等待，不放开写锁；成功后按变更版本确认快照）。
  */
 
 import {
@@ -23,7 +23,7 @@ import {
   readJsonFileEx,
   writeFileAtomic,
 } from "../../../core/storage/fsa";
-import { toast } from "../../../ui/toast";
+import { dismissToast, persistentToast } from "../../../ui/toast";
 import type { RgbHex } from "../../../core/imaging/stats";
 
 declare global {
@@ -151,8 +151,8 @@ let generation = 0;
 let indexSentinel: { size: number; lastModified: number } | null = null;
 /** 哨兵触发提示只弹首次，防连环保存刷屏（F2） */
 let sentinelToastShown = false;
-/** save 序号（F4）：守卫放行的旧 save 靠它识别"已有更新的保存落盘" */
-let saveSeq = 0;
+/** 变更版本：只确认本次快照；写盘期间的新编辑仍保持 dirty。 */
+let revision = 0;
 
 /** 取 index.json 的 stat 快照（F2 哨兵用）；文件不存在返回 null，其余异常上抛由调用方判定 */
 async function statIndexFile(
@@ -176,58 +176,83 @@ let dirty = false;
 let changeCount = 0;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let saveChain: Promise<void> = Promise.resolve();
+let savePending = false;
+let retryCount = 0;
+let saveBlocked = false;
+const RETRY_DELAYS = [2000, 5000, 10000];
+const SAVE_TOAST = "library-save";
 /** 实际原子写次数（index + meta 各计一次；供验收 console 断言） */
 let writeCount = 0;
 let bestEffortBound = false;
 
 /**
- * 落盘链护栏：单次 save 挂起（云盘/慢盘 createWritable/write 永不 settle）时
- * 15s 超时放行，避免一条挂起堵死整条保存链与 UI。超时后原 save 可能仍在后台
- * 写，下一次 save 的 createWritable 若因此冲突报错由既有 .catch 兜住，接受
- * 该竞态（云盘挂起是病态环境，护栏只为不堵死链条与 UI）。防抖/100 条兜底/
- * flush 语义不变。
+ * 15s 只结束调用方等待，不放开磁盘写锁；旧写真正结束前不启动另一轮。
+ * 成功/失败均清理超时定时器，失败保留 dirty；禁止带未保存内容切库。
  */
 const SAVE_TIMEOUT_MS = 15_000;
 
 function enqueueSave(): void {
-  saveChain = saveChain
-    .then(() =>
-      Promise.race([
-        save(),
-        new Promise<void>((resolve) => {
-          setTimeout(() => {
-            console.error("[library] 索引落盘超时（>15s），放行后续保存");
-            resolve();
-          }, SAVE_TIMEOUT_MS);
-        }),
-      ]),
-    )
-    .catch((err) => console.error("[library] 索引落盘失败", err));
+  if (savePending || saveBlocked || !dirty) return;
+  savePending = true;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const operation = (async () => {
+    let failed = false;
+    try {
+      await save();
+      retryCount = 0;
+    } catch (err) {
+      failed = true;
+      console.error("[library] 索引落盘失败", err);
+      persistentToast(SAVE_TOAST, "图库尚未保存成功，内容仍在内存中，请勿关闭页面。", {
+        label: "重试保存",
+        run: () => {
+          retryCount = 0;
+          persistentToast(SAVE_TOAST, "正在重试保存图库，请勿关闭页面…");
+          void flush();
+        },
+      });
+    } finally {
+      clearTimeout(timeout);
+      savePending = false;
+      if (dirty && !saveBlocked) {
+        if (!failed) scheduleSave();
+        else if (retryCount < RETRY_DELAYS.length) scheduleSave(RETRY_DELAYS[retryCount++]);
+      }
+    }
+  })();
+  saveChain = Promise.race([
+    operation,
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(() => {
+        console.error("[library] 索引落盘超时（>15s），仍在等待磁盘写入，未启动并发保存");
+        persistentToast(SAVE_TOAST, "图库保存耗时较长，仍在等待磁盘。请勿关闭页面或切换图库。");
+        resolve();
+      }, SAVE_TIMEOUT_MS);
+    }),
+  ]);
 }
 
-function scheduleSave(): void {
+function scheduleSave(delay = 1000): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
     enqueueSave();
-  }, 1000);
+  }, delay);
 }
 
 /** 变更登记：标记 dirty + 防抖 + 每 100 条兜底落盘（写入策略 2/3/4） */
 function markChanged(): void {
   changeCount += 1;
-  if (!dirty) {
-    dirty = true;
-    scheduleSave();
-  }
+  revision += 1;
+  dirty = true;
+  if (!saveTimer && !savePending && !saveBlocked) scheduleSave();
   if (changeCount >= 100) void flush();
 }
 
 async function save(): Promise<void> {
   if (!activeDir || !indexMap || !activeMeta) return;
   const dir = activeDir;
-  const seq = ++saveSeq; // F4：本次保存的序号，写盘前自查是否已被更新的保存取代
-  dirty = false;
+  const savedRevision = revision;
   changeCount = 0;
   const items = [...indexMap.values()];
   activeMeta.stats.files = items.length;
@@ -236,6 +261,9 @@ async function save(): Promise<void> {
       typeof item.pipelineVersion === "number" && item.pipelineVersion >= 1,
   ).length;
   activeMeta.updatedAt = Date.now();
+  // 同一时刻捕获 index/meta，await 期间的编辑交下一轮保存。
+  const indexText = JSON.stringify(items, null, 2);
+  const metaText = JSON.stringify(activeMeta, null, 2);
 
   // F2 外部变更哨兵：写前 stat 与哨兵比对，不符即中止本次保存（index 与 meta 都不写），
   // 否则会把用户刚恢复的备份整份覆盖回内存旧态（RC2）。stat 自身失败按"无法判定"
@@ -247,6 +275,7 @@ async function save(): Promise<void> {
         current.size !== indexSentinel.size ||
         current.lastModified !== indexSentinel.lastModified;
       if (changed) {
+        saveBlocked = true;
         console.error(
           "[library] index.json 已在外部被修改，已暂停索引保存以防覆盖（一致恢复：刷新可载入恢复内容；不一致的孤儿条目会被扫描清理）",
           { sentinel: indexSentinel, current },
@@ -256,7 +285,7 @@ async function save(): Promise<void> {
           // 尾句口径（A 2026-09-17 裁定，PR-013 选 C）：刷新只对"一致恢复"有效——
           // 备份里引用、而图库文件夹当下没有的条目会被打开时的扫描按"消失"清掉，
           // 故必须把"需同一时期"说清楚，不能让用户以为刷新万能。
-          toast(
+          persistentToast(SAVE_TOAST,
             "检测到索引文件被外部修改，已暂停保存。若你刚恢复备份，请刷新页面载入恢复内容（备份需与图库文件夹为同一时期，不一致的条目会被扫描清理）",
           );
         }
@@ -267,14 +296,7 @@ async function save(): Promise<void> {
     console.warn("[library] 索引外部变更哨兵读取失败，跳过本次守卫照常保存", err);
   }
 
-  // F4 save 序守卫：护栏超时放行后旧 save 若恢复执行，在此发现已被取代即放弃，
-  // 避免旧快照在新快照之后落地造成盘上回卷。缩小窗口型修复：已进入
-  // createWritable 之后的写入无法取消，故不能完全消除该竞态。
-  if (seq !== saveSeq) {
-    console.warn("[library] 更新的保存已落盘，放弃本次旧快照写入");
-    return;
-  }
-  await writeFileAtomic(dir, ".ystk/index.json", JSON.stringify(items, null, 2));
+  await writeFileAtomic(dir, ".ystk/index.json", indexText);
   writeCount += 1;
   // 自己写的变更要被哨兵认账：写成功后重取 stat 更新哨兵
   try {
@@ -284,12 +306,10 @@ async function save(): Promise<void> {
     indexSentinel = null;
   }
 
-  if (seq !== saveSeq) {
-    console.warn("[library] 更新的保存已落盘，放弃本次旧快照写入");
-    return;
-  }
-  await writeFileAtomic(dir, ".ystk/meta.json", JSON.stringify(activeMeta, null, 2));
+  await writeFileAtomic(dir, ".ystk/meta.json", metaText);
   writeCount += 1;
+  dirty = revision !== savedRevision;
+  if (!dirty) dismissToast(SAVE_TOAST);
 }
 
 /**
@@ -427,11 +447,23 @@ export async function activateLibrary(
 /** 卸载图库：先落盘再清内存（切换/页面卸载时由调用方保证顺序） */
 export async function deactivateLibrary(): Promise<void> {
   await flush();
+  if (hasPendingSave()) {
+    throw new Error("当前图库尚未保存成功，已取消切换或解绑。请先处理保存提示，避免丢失修改。");
+  }
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = null;
   activeDir = null;
   activeMeta = null;
   indexMap = null;
   indexSentinel = null;
+  saveBlocked = false;
+  retryCount = 0;
   generation += 1;
+}
+
+/** 失败时保留的活动图库不能通过重新激活从磁盘覆盖。 */
+export function hasPendingSave(): boolean {
+  return dirty || savePending;
 }
 
 export function listItems(): LibraryIndexItem[] {

@@ -46,20 +46,49 @@ export function AppShell() {
     };
   }, []);
 
-  // 左侧热区是浮在内容区之上的全高条（56px），它的祖先链里没有滚动容器；
-  // 滚轮落在它身上时浏览器找不到可滚区域，会把这次滚动整个吃掉——表现为
-  // 「鼠标在页面左缘 56px 内滚不动页」（2026-09-16 修复）。
-  // 这里把纵向/横向滚轮手动转交给内容区；deltaMode 1=行 2=页，按行高/视口换算。
+  // 左侧热区是浮在内容区之上的全高条（56px），它自己不在任何滚动容器的祖先链里；
+  // 滚轮落在它身上时浏览器找不到可滚区域，会把整次滚动吃掉——表现为「鼠标贴左缘滚不动页」。
+  // 2026-09-16 先按「转交内容区」兜底；2026-10-17 用户要求图库页左缘也能正常滚动：改成把
+  // 这次滚动交给「指针下面真正能滚的那个元素」（elementsFromPoint 可穿透热区本身），
+  // 于是 /library 这类「内容区里再套一层 .lib-page 滚动容器」的页面也滚得动了。
   useEffect(() => {
     const hot = hotRef.current;
     const content = contentRef.current;
     if (!hot || !content) return;
+    /** 指针位置下所有可滚元素（穿透热区，按离指针由近及远） */
+    const scrollersAt = (x: number, y: number) => {
+      const found: HTMLElement[] = [];
+      for (const el of document.elementsFromPoint(x, y)) {
+        if (!(el instanceof HTMLElement) || el === hot) continue;
+        const style = getComputedStyle(el);
+        const canY =
+          /(auto|scroll|overlay)/.test(style.overflowY) &&
+          el.scrollHeight > el.clientHeight + 1;
+        const canX =
+          /(auto|scroll|overlay)/.test(style.overflowX) &&
+          el.scrollWidth > el.clientWidth + 1;
+        if (canY || canX) found.push(el);
+      }
+      return found;
+    };
     const onWheel = (e: WheelEvent) => {
-      const unit =
-        e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? content.clientHeight : 1;
+      const targets = scrollersAt(e.clientX, e.clientY);
+      const primary = targets[0] ?? content;
+      // deltaMode 1=行 2=页，按行高/视口高换算
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? primary.clientHeight : 1;
       e.preventDefault();
-      content.scrollTop += e.deltaY * unit;
-      content.scrollLeft += e.deltaX * unit;
+      let restY = e.deltaY * unit;
+      let restX = e.deltaX * unit;
+      // 先滚最里层；滚到头还有余量就继续交给外层（嵌套滚动容器）
+      for (const el of targets.length > 0 ? targets : [content]) {
+        if (restY === 0 && restX === 0) break;
+        const beforeY = el.scrollTop;
+        const beforeX = el.scrollLeft;
+        el.scrollTop += restY;
+        el.scrollLeft += restX;
+        restY -= el.scrollTop - beforeY;
+        restX -= el.scrollLeft - beforeX;
+      }
     };
     hot.addEventListener("wheel", onWheel, { passive: false });
     return () => hot.removeEventListener("wheel", onWheel);

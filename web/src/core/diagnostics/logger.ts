@@ -14,7 +14,7 @@
  *   = 一个 JSONL 文件**；浏览器刷新/重开开关都续写同一文件，不产生新文件。
  *   dev server 重启 → 新文件名 → 新文件。
  * - dev server 不可达（vite preview / 静态站）：自动降级仅内存，状态可见
- * - 页面隐藏/卸载兜底：小批量走 sendBeacon，大批量赌普通 fetch（尽力而为）
+ * - 页面隐藏/卸载兜底：小批量 keepalive fetch，收到成功响应才确认（尽力而为）
  */
 
 export type DevLogLevel = "meta" | "info" | "state" | "warn" | "error";
@@ -51,8 +51,9 @@ const FLUSH_MS = 10_000;
 /** msg / detail 截断长度 */
 const MSG_CAP = 300;
 const DETAIL_CAP = 1500;
-/** sendBeacon 单次负载上限（浏览器实现普遍 64KB，留余量） */
-const BEACON_CAP = 60_000;
+/** 按 UTF-8 字节计整包，低于 keepalive 64KB 与服务端 2MB 上限。 */
+const BATCH_BYTES = 48_000;
+const encoder = new TextEncoder();
 
 const ENDPOINT = "/api/devlog";
 /** 取当前 dev server 会话文件名（实现"日志与 dev server 启停绑定"） */
@@ -60,8 +61,10 @@ const SESSION_ENDPOINT = "/api/devlog/session";
 
 let started = false;
 let entries: DevLogEntry[] = [];
-/** 已成功上报到的下标（sentUpto 之前的行都已写盘） */
+/** 单调序号：环形缓冲裁剪后仍能准确确认在途批次，不能用当前数组长度。 */
 let sentUpto = 0;
+let firstSeq = 0;
+let runGeneration = 0;
 let sessionFile: string | null = null;
 let flushTimer: ReturnType<typeof setInterval> | null = null;
 let flushChain: Promise<void> = Promise.resolve();
@@ -104,10 +107,11 @@ function argsToDetail(args: unknown[]): string | undefined {
 
 /** 记一条（内部直达，不做开关判断——关闭沿的收尾条目也要能记录） */
 function push(lvl: DevLogLevel, src: string, msg: string, detail?: string): void {
-  entries.push({ t: Date.now(), lvl, src, msg: cap(msg, MSG_CAP), detail });
+  entries.push({ t: Date.now(), lvl, src, msg: cap(msg, MSG_CAP), detail: detail ? cap(detail, DETAIL_CAP) : undefined });
   if (entries.length > RING_MAX) {
     entries.splice(0, RING_DROP);
-    sentUpto = Math.max(0, sentUpto - RING_DROP);
+    firstSeq += RING_DROP;
+    sentUpto = Math.max(firstSeq, sentUpto);
   }
 }
 
@@ -142,7 +146,7 @@ export function devLogStatus(): DevLogStatus {
   return {
     started,
     buffered: entries.length,
-    pending: Math.max(0, entries.length - sentUpto),
+    pending: Math.max(0, firstSeq + entries.length - sentUpto),
     file: sessionFile,
     lastFlushAt,
     sinkError,
@@ -204,38 +208,59 @@ function localStamp(d = new Date()): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-/** 未上报行 → JSONL 文本（无新增返回 null） */
-function pendingText(): string | null {
-  if (sentUpto >= entries.length) return null;
-  return `${entries.slice(sentUpto).map((e) => JSON.stringify(e)).join("\n")}\n`;
+/** 冻结本批载荷及确认位置；后续追加/裁剪不改变本批含义。 */
+function pendingBatch(until: number): { payload: string; end: number } | null {
+  if (!sessionFile) return null;
+  let text = "";
+  let payload = "";
+  let end = Math.max(firstSeq, sentUpto);
+  const limit = Math.min(until, firstSeq + entries.length);
+  while (end < limit) {
+    const next = text + JSON.stringify(entries[end - firstSeq]) + "\n";
+    const candidate = JSON.stringify({ file: sessionFile, text: next });
+    if (encoder.encode(candidate).byteLength > BATCH_BYTES) break;
+    text = next;
+    payload = candidate;
+    end += 1;
+  }
+  return payload ? { payload, end } : null;
 }
 
 async function flushNow(): Promise<void> {
-  const text = pendingText();
-  if (!sessionFile || text === null) return;
-  const res = await fetch(ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file: sessionFile, text }),
-  });
-  // 409 = dev server 已重启换会话（本页还持旧名）：改用新名重投，
-  // 否则会往旧文件续写，违背"一个 server 生命周期一个文件"
-  if (res.status === 409) {
-    const data = (await res.json().catch(() => null)) as { session?: unknown } | null;
-    if (typeof data?.session === "string" && /^session-\d{8}-\d{6}\.jsonl$/.test(data.session)) {
-      sessionFile = data.session;
+  const gen = runGeneration;
+  const until = firstSeq + entries.length;
+  let batch = pendingBatch(until);
+  while (batch && gen === runGeneration) {
+    const res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: batch.payload,
+      keepalive: true,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (gen !== runGeneration) return;
+    // 409 = dev server 已重启换会话，保留本批数据，下次改用新会话重投。
+    if (res.status === 409) {
+      const data = (await res.json().catch(() => null)) as { session?: unknown } | null;
+      if (gen !== runGeneration) return;
+      if (typeof data?.session === "string" && /^session-\d{8}-\d{6}\.jsonl$/.test(data.session)) {
+        sessionFile = data.session;
+      }
+      throw new Error("会话已更换，待下次上报重投");
     }
-    throw new Error("会话已更换，待下次上报重投");
+    if (!res.ok) throw new Error(`POST /api/devlog → ${res.status}`);
+    sentUpto = Math.max(sentUpto, batch.end);
+    lastFlushAt = Date.now();
+    sinkError = false;
+    batch = pendingBatch(until);
   }
-  if (!res.ok) throw new Error(`POST /api/devlog → ${res.status}`);
-  sentUpto = entries.length;
-  lastFlushAt = Date.now();
-  sinkError = false;
 }
 
 /** 串行上报链（同 vector store 落盘先例）：失败只置状态位，绝不抛出 */
 function scheduleFlush(): void {
+  const gen = runGeneration;
   flushChain = flushChain.then(() => flushNow()).catch(() => {
+    if (gen !== runGeneration) return;
     sinkError = true;
     lastFlushAt = Date.now();
   });
@@ -247,20 +272,9 @@ export function devLogFlush(): Promise<void> {
   return flushChain;
 }
 
-/** 页面隐藏/卸载兜底：小批量 sendBeacon（不可达也不报错），大批量赌普通 fetch */
+/** 页面隐藏/卸载兜底：沿用串行分包，避免把“已排队发送”误当服务端已写盘。 */
 function flushUrgent(): void {
-  const text = pendingText();
-  if (!sessionFile || text === null) return;
-  const payload = JSON.stringify({ file: sessionFile, text });
-  if (payload.length <= BEACON_CAP) {
-    navigator.sendBeacon(
-      ENDPOINT,
-      new Blob([payload], { type: "application/json" }),
-    );
-    sentUpto = entries.length;
-  } else {
-    void devLogFlush();
-  }
+  void devLogFlush();
 }
 
 /* ---- 启停 ---- */
@@ -277,7 +291,7 @@ function onVisibility(): void {
  */
 async function resolveSessionFile(): Promise<string> {
   try {
-    const res = await fetch(SESSION_ENDPOINT);
+    const res = await fetch(SESSION_ENDPOINT, { signal: AbortSignal.timeout(8000) });
     if (res.ok) {
       const data = (await res.json()) as { session?: unknown };
       if (typeof data.session === "string" && /^session-\d{8}-\d{6}\.jsonl$/.test(data.session)) {
@@ -293,21 +307,23 @@ async function resolveSessionFile(): Promise<string> {
 export function devLogStart(): void {
   if (started) return;
   started = true;
-  // 新会话：清缓冲与去重表（上一次会话已在关闭沿上报完）
-  entries = [];
-  sentUpto = 0;
+  const gen = ++runGeneration;
+  sessionFile = null;
+  // 开关重开保留尚未确认的日志；旧异步回包不能确认新一轮数据。
   lastSummary.clear();
   lastRoute = null;
   patchConsole();
   window.addEventListener("error", onWindowError);
   window.addEventListener("unhandledrejection", onRejection);
   document.addEventListener("visibilitychange", onVisibility);
-  window.addEventListener("pagehide", onVisibility);
+  window.addEventListener("pagehide", flushUrgent);
   flushTimer = setInterval(() => scheduleFlush(), FLUSH_MS);
   // 定名是异步的（要问 dev server）；期间条目照常入缓冲，flushNow 见
   // sessionFile 为 null 会跳过，定名完成后统一上报——不丢条目，只晚一拍
   void (async () => {
-    sessionFile = await resolveSessionFile();
+    const file = await resolveSessionFile();
+    if (gen !== runGeneration) return;
+    sessionFile = file;
     scheduleFlush(); // 立即首刷：写入会话首行 + 尽早暴露 dev server 可达性
   })();
 }
@@ -322,7 +338,7 @@ export async function devLogStop(): Promise<void> {
   window.removeEventListener("error", onWindowError);
   window.removeEventListener("unhandledrejection", onRejection);
   document.removeEventListener("visibilitychange", onVisibility);
-  window.removeEventListener("pagehide", onVisibility);
+  window.removeEventListener("pagehide", flushUrgent);
   restoreConsole();
   push("info", "devlog", "开发者日志已关闭");
   await devLogFlush();

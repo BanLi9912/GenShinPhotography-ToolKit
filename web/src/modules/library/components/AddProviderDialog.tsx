@@ -45,9 +45,21 @@ export function AddProviderDialog({
   const [error, setError] = useState("");
   const nameRef = useRef<HTMLInputElement | null>(null);
 
-  // 打开即聚焦名称输入；Esc 关闭（点遮罩关闭见 mask 的 onMouseDown）
+  /**
+   * 打开即聚焦名称输入，**只在挂载时执行一次**（依赖数组必须为空）：
+   * 聚焦不依赖 onClose —— 父组件传入的是内联箭头（GlobalSettingsPanel 的
+   * `onClose={() => setProviderDialog(null)}`），父组件每次重渲染都换引用，
+   * 若把 onClose 放进依赖数组，弹窗打开期间会在每次父重渲染时重跑本 effect
+   * 把焦点反复抢回名称框（2026-10-03 用户报 bug：队列运行时 1s 成本轮询
+   * 重渲染 → 光标每秒被抢回一次，导致无法在 API 地址框连续输入）。
+   */
   useEffect(() => {
     nameRef.current?.focus();
+  }, []);
+
+  // Esc 关闭（点遮罩关闭见 mask 的 onMouseDown）；依赖仍为 [onClose]：
+  // 重订阅无害，且必须拿到最新闭包
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -84,13 +96,18 @@ export function AddProviderDialog({
           ),
         });
       } else {
-        // add：新 id，apiKey 与 model 以 "" 起步（主界面 key 行 / 模型行填）
+        // add：新 id，apiKey 与 model 以 "" 起步（主界面 key 行 / 模型行填）；
+        // 价格三字段显式置 0（价格行按供应商绑定），保存后内存态立即有效，
+        // 不必等下次 loadVisionGlobal 的归一
         const created: CustomProviderConfig = {
           id: newCustomProviderId(),
           name: trimmedName,
           baseUrl: trimmedUrl,
           apiKey: "",
           model: "",
+          priceInput: 0,
+          priceCached: 0,
+          priceOutput: 0,
         };
         onSave({
           customProviders: [...current.customProviders, created],

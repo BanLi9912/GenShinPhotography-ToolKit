@@ -6,6 +6,8 @@
 
 > 版本 **0.3.0**（以 `web/src/app/version.ts` 的 `APP_VERSION` 为准）
 
+> 本次发布 **v1.1.0**：图库备份三代历史、画布保存失败重试与诊断日志加固、M3 供应商价格绑定、`install.bat` 修便携 Node PATH；新增**浏览器拖拽采集扩展**（网页上的图拖进浮卡，直接存进图库正在浏览的目录，见下文「拖拽采集」）。
+
 ---
 
 ## 模块现状
@@ -80,6 +82,7 @@ npm run lint       # oxlint
 | **CUGAN 3x / 4x** | Real-CUGAN 六档 | 约 32 MB；同一套 Python 工具链 | 3x / 4x 点了会报"模型加载失败"（按钮仍显示） |
 | **向量搜索** | 语义检索（默认词典引擎之外） | 需自装 [Ollama](https://ollama.com/) + `ollama pull bge-m3` | 自动回落到词典引擎，不报错 |
 | **云端识图** | 参考图库的 AI 打标/描述 | 需你自己的 API key（应用内填，存浏览器本地） | 识图不可用，其余功能不受影响 |
+| **拖拽采集** | 网页图片拖进浮卡，直接存进图库正在浏览的目录（或子目录） | 无需下载；需 Chrome / Edge 里**手动加载一次** `web/extensions/collector` | 只能从网页拖图进库，其余功能不受影响 |
 
 **权重与许可边界（重要）**：本仓库**不包含任何模型权重文件**，也不随包分发权重。转换工具链与官方渠道下载地址在 `web/scripts/convert-sr-models/README.md`（含逐步命令与数值校验标准）。
 
@@ -88,6 +91,20 @@ npm run lint       # oxlint
 - `upscalejs`（npm 包）未声明 `license` 字段。
 
 即：**每个使用者从权利人处自行下载、本地转换、本地使用**。
+
+### 拖拽采集扩展（一次性手动加载）
+
+模仿 Eagle 的采集手感：在任意网页按住一张图拖一下，**拖动起点旁边**弹出采集浮卡，拖进框里松手，图片就直接写进图库当前浏览的目录。
+
+1. 浏览器打开 `chrome://extensions`（Edge 是 `edge://extensions`），右上角打开**开发者模式**；
+2. 点「加载已解压的扩展程序」，选 `web/extensions/collector`（`manifest.json` 所在那一层）；
+3. 起应用（`scripts\start-web.bat`）→ 打开图库页并绑定图库 → 回网页拖图。
+
+浮卡里**框型就是图例**：**虚线框 = 投放区**（左栏当前目录、右栏每行子目录，松手即存）；**点线框 = 悬停区**（「返回上级」「展开下级」，拖上去停 0.5 秒才生效）。拖出浮卡松手 = 取消，页面本身不压暗、不吃事件。
+
+保存**只落盘、不动索引**：回工具箱点一次「重新扫描」，新图才进网格。
+
+限制：扩展只认 `http://localhost:5173` 与 `http://127.0.0.1:5173`（端口写死在 `manifest.json`），工具箱标签页要停在图库页；它不申请下载权限、不带 cookie，取不到的图会如实报错。细节与故障排查见 [`web/extensions/collector/README.md`](web/extensions/collector/README.md)。
 
 ---
 
@@ -98,6 +115,7 @@ npm run lint       # oxlint
 - **超分 3x / 4x 必须先装模型组件**（见上），否则点击报错。
 - **识图需要你自己的 key**，且 key 存在浏览器 IndexedDB 里（明文，不落磁盘文件）；清除浏览器数据会丢。
 - **说明书配图不全**：M1 / M4 / SR 的说明页部分章节还是「待补截图」占位（M3 配图完整）。
+- **拖拽采集扩展要手动加载**，且白名单端口写死 `5173`：dev server 落在别的端口（5173 被占时 vite 会顺延）扩展就认不到，需改 `web/extensions/collector/manifest.json` 里的匹配规则并重新加载。
 - 部分**内部开发文档、任务卡与历史留痕不在本仓库内**（本项目另行保管），本仓库只含可运行的应用源码与面向使用者的文档。
 
 ---
@@ -116,6 +134,7 @@ web/                     # 前端工程（React 18 + TypeScript + Vite）
   src/modules/           #   四个业务模块（canvas / layout / library / lab / superres）
   src/ui/  src/styles/   #   公共组件与设计 token（浅色/深色双主题）
   public/help/           #   使用说明配图
+  extensions/collector/  #   浏览器拖拽采集扩展（MV3，手动加载；含离线自测页）
   scripts/               #   dev server 中间件用到的构建脚本、权重转换工具链
 ```
 

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>原摄工具箱 · 拖拽采集</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="pop">
+      <header class="head">
+        <h1 class="title">拖拽采集</h1>
+        <label class="switch">
+          <input type="checkbox" id="enabled" />
+          <span>采集开关</span>
+        </label>
+      </header>
+
+      <section class="block">
+        <h2 class="block-title">接收端</h2>
+        <p id="receiver" class="hint">正在检测工具箱页面…</p>
+        <ul id="candidates" class="list"></ul>
+      </section>
+
+      <section class="block">
+        <h2 class="block-title">最近任务</h2>
+        <p id="last-task" class="hint">还没有采集记录。</p>
+      </section>
+
+      <footer class="foot">
+        <button type="button" id="refresh" class="ghost">刷新状态</button>
+        <p class="hint">保存到工具箱当前浏览目录或其子目录；只落盘，回工具箱点「重新扫描」才入索引。</p>
+      </footer>
+    </main>
+    <script src="tokens.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

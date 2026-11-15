@@ -4,7 +4,7 @@
  * 的图库逐个检查 `.ystk` 核心索引文件（meta.json / index.json / vectors.bin，
  * 不含 thumbs——可从原图重建，用户 2026-09-24 口径）的 mtime/size 变更，
  * 有变更即读文件内容 base64 后交 dev server 中间件写入仓库根
- * devdata/backup/<libraryId>/latest/（覆盖式只留一代，用户口径）。
+ * devdata/backup/<库名>--<libraryId>/latest/（当前代 + 两代历史）。
  * - 变更检测：浏览器 FSA 取三个文件的 lastModified/size → POST check →
  *   Node 与 manifest.json 比对；比对保守（size 或 mtime 任一变即算变更，
  *   宁可多拷一代也不漏备份）
@@ -56,8 +56,9 @@ async function statYstkFile(
     const ystk = await dir.getDirectoryHandle(".ystk");
     const file = await (await ystk.getFileHandle(name)).getFile();
     return { path: name, mtime: file.lastModified, size: file.size };
-  } catch {
-    return null; // 文件不存在（如未开向量的库没有 vectors.bin）
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "NotFoundError") return null;
+    throw err; // 权限/IO 失败不可冒充“不存在”后生成不完整备份。
   }
 }
 
@@ -91,16 +92,21 @@ async function backupOneLibrary(libraryId: string): Promise<BackupOutcome> {
     if (stat) files.push(stat);
   }
   if (files.length === 0) return { status: "skipped" }; // 连 meta.json 都没有：异常库，跳过
+  if (!files.some((f) => f.path === "meta.json") || !files.some((f) => f.path === "index.json")) {
+    throw new Error("图库索引不完整，未替换已有备份");
+  }
 
   // ① check：把清单交给中间件与 manifest 比对（带库名——备份目录名用库本名）
   const checkRes = await fetch("/api/backup/check", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ libraryId, name: entry.name, files }),
+    signal: AbortSignal.timeout(15000),
   });
   if (!checkRes.ok) throw new Error(`POST /api/backup/check → ${checkRes.status}`);
   const check = (await checkRes.json()) as { ok?: boolean; changed?: boolean; dir?: string };
-  if (!check.ok || !check.changed) return { status: "unchanged" };
+  if (!check.ok) throw new Error("备份检查失败");
+  if (!check.changed) return { status: "unchanged" };
   // 记住本库实际落盘的目录名（供状态行展示）
   if (typeof check.dir === "string") dirs.set(libraryId, check.dir);
 
@@ -109,7 +115,17 @@ async function backupOneLibrary(libraryId: string): Promise<BackupOutcome> {
   for (const f of files) {
     const blob = await readFileBlob(entry.handle, `.ystk/${f.path}`);
     if (!blob) throw new Error(`读取 ${f.path} 失败（检查时存在）`);
+    if (blob.size !== f.size || blob.lastModified !== f.mtime) throw new Error("备份期间索引发生变化，请稍后重试");
     payloads.push({ path: f.path, base64: await blobToBase64(blob) });
+  }
+  // 编码期间任一文件变化或可选文件增删，整轮放弃，避免混用不同时间的清单。
+  for (const name of BACKUP_FILES) {
+    const current = await statYstkFile(entry.handle, name);
+    const before = files.find((f) => f.path === name);
+    if ((!current !== !before) || (current && before &&
+      (current.size !== before.size || current.mtime !== before.mtime))) {
+      throw new Error("备份期间索引发生变化，请稍后重试");
+    }
   }
   const commitRes = await fetch("/api/backup/commit", {
     method: "POST",
@@ -120,6 +136,7 @@ async function backupOneLibrary(libraryId: string): Promise<BackupOutcome> {
       files: payloads,
       manifest: files,
     }),
+    signal: AbortSignal.timeout(60000),
   });
   if (!commitRes.ok) throw new Error(`POST /api/backup/commit → ${commitRes.status}`);
   const commit = (await commitRes.json()) as { ok?: boolean };
@@ -131,7 +148,7 @@ async function backupOneLibrary(libraryId: string): Promise<BackupOutcome> {
 
 let running = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
-/** 本库实际落盘目录名（devdata/backup/<dir>；取库本名，清洗不可用时回退 libraryId） */
+/** 本库实际落盘目录名（库名 + 唯一 ID；重命名后服务端复用原目录）。 */
 const dirs = new Map<string, string>();
 
 export function runBackup(manual: boolean): Promise<void> {

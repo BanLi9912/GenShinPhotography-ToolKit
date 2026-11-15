@@ -1,4 +1,5 @@
 import { BOARDS_STORE, getDB } from "../../core/storage/idb";
+import { dismissToast, persistentToast } from "../../ui/toast";
 import {
   assetCacheIds,
   deleteAssetsExcept,
@@ -42,25 +43,54 @@ let startPromise: Promise<void> | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 /** 保存串行化：后一次保存读到的一定是最新状态，避免并发写交错 */
 let saveChain: Promise<void> = Promise.resolve();
+let revision = 0;
+let savedRevision = 0;
+let savePending = false;
+let retryCount = 0;
+const RETRY_DELAYS = [2000, 5000, 10000];
+const SAVE_TOAST = "canvas-save";
 
 function enqueueSave(): void {
+  if (savePending || revision === savedRevision) return;
+  savePending = true;
   saveChain = saveChain
-    .then(saveBoard)
-    .catch((err) => console.error("[canvas] 自动保存失败", err));
+    .then(async () => {
+      const snapshotRevision = revision;
+      await saveBoard();
+      savedRevision = snapshotRevision;
+      retryCount = 0;
+      if (savedRevision === revision) dismissToast(SAVE_TOAST);
+    })
+    .catch((err) => {
+      console.error("[canvas] 自动保存失败", err);
+      persistentToast(SAVE_TOAST, "画布尚未保存成功，内容仍在内存中，请勿关闭页面。", {
+        label: "重试保存",
+        run: () => {
+          retryCount = 0;
+          persistentToast(SAVE_TOAST, "正在重试保存画布，请勿关闭页面…");
+          flushSave();
+        },
+      });
+      if (retryCount < RETRY_DELAYS.length) scheduleSave(RETRY_DELAYS[retryCount++]);
+    })
+    .finally(() => {
+      savePending = false;
+      // 写入期间的新编辑必须另存；失败超过重试上限则保留提示，等用户手动重试。
+      if (revision !== savedRevision && retryCount === 0 && !timer) scheduleSave();
+    });
 }
 
-function scheduleSave(): void {
+function scheduleSave(delay = AUTOSAVE_DELAY_MS): void {
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = null;
     enqueueSave();
-  }, AUTOSAVE_DELAY_MS);
+  }, delay);
 }
 
 /** 立即落盘（页面隐藏/关闭时调用，取消未决的防抖） */
 function flushSave(): void {
-  if (!timer) return;
-  clearTimeout(timer);
+  if (timer) clearTimeout(timer);
   timer = null;
   enqueueSave();
 }
@@ -94,9 +124,14 @@ async function saveBoard(): Promise<void> {
     })),
   };
   await db.put(BOARDS_STORE, doc, BOARD_ID);
-  // GC：删除不再被任何元素引用的资产；内存缓存中的保留（导入进行中，引用尚未形成）
-  await deleteAssetsExcept(new Set([...assetIds, ...assetCacheIds()]));
   useCanvasStore.getState().setLastSavedAt(Date.now());
+  // GC：删除不再被任何元素引用的资产；内存缓存中的保留（导入进行中，引用尚未形成）
+  try {
+    await deleteAssetsExcept(new Set([...assetIds, ...assetCacheIds()]));
+  } catch (err) {
+    // 文档已提交，清理失败不应被报成保存失败，也不因此重复写文档。
+    console.warn("[canvas] 孤本资产清理失败", err);
+  }
 }
 
 async function restoreBoard(): Promise<void> {
@@ -142,6 +177,7 @@ export function startCanvasPersistence(): Promise<void> {
       useCanvasStore.subscribe((s, prev) => {
         if (s.elements === prev.elements && s.viewport === prev.viewport)
           return;
+        revision += 1;
         scheduleSave();
       });
       window.addEventListener("pagehide", flushSave);

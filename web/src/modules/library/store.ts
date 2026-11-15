@@ -293,6 +293,8 @@ const CLEARED_SEARCH = {
   starredOnly: false,
   folderScope: null as string | null,
   filterOpen: false,
+  /** 文件夹树左侧浮层：切库/清空全部时一并收起（2026-10-17 从高级筛选迁出） */
+  folderDrawerOpen: false,
   /** 搜索框聚焦态：聚焦时工具栏不收起，保证输入中搜索栏保持伸出（M3.4 修复 2026-08） */
   searchFocused: false,
   pendingDetailId: null as string | null,
@@ -427,6 +429,8 @@ interface LibraryState {
   /** 跨库结果内存态（PR-007：CrossResults 计算写入；不持久化、不进复位快照） */
   cross: CrossState;
   filterOpen: boolean;
+  /** 文件夹树左侧浮层开关（贴左缘静止 1s 自动弹出；见 components/FolderDrawer.tsx） */
+  folderDrawerOpen: boolean;
   /** 搜索框聚焦态：true 时工具栏不收起（M3.4 修复 2026-08） */
   searchFocused: boolean;
   /** 跨库点击后待打开的详情（切库扫描完成后自动开） */
@@ -480,6 +484,7 @@ interface LibraryState {
   setFolderScope: (scope: string | null) => void;
   setCrossLibrary: (on: boolean) => void;
   setFilterOpen: (open: boolean) => void;
+  setFolderDrawerOpen: (open: boolean) => void;
   setSearchFocused: (focused: boolean) => void;
   clearSearchAndFilters: () => void;
   setPendingDetailId: (id: string | null) => void;
@@ -896,6 +901,8 @@ async function openEntry(
 async function recoverActiveLibrary(
   entryAfterFailure: LibraryRegistryEntry,
 ): Promise<"none" | "recovered" | "failed"> {
+  // 保存失败时旧库仍完整驻留内存；重新激活会用磁盘旧态覆盖未保存编辑。
+  if (indexFile.hasPendingSave()) return "none";
   const prev = useLibraryStore.getState().current;
   if (!prev || prev.libraryId === entryAfterFailure.libraryId) return "none";
   const prevEntry = binding.getEntry(prev.libraryId);
@@ -1035,7 +1042,12 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
   /** 切换图库：先落盘卸载当前库，再打开目标库 */
   switchTo: async (libraryId: string) => {
     if (get().current?.libraryId === libraryId) return;
-    await indexFile.deactivateLibrary();
+    try {
+      await indexFile.deactivateLibrary();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err));
+      return;
+    }
     const entry = binding.getEntry(libraryId);
     if (!entry) return;
     const granted = await binding.ensureEntryPermission(entry, true);
@@ -1082,7 +1094,12 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
     const isCurrent = get().current?.libraryId === libraryId;
     if (isCurrent) {
       abortVisionRun("解绑图库"); // M3.5.3.4 中止原因逐字透传（小窗显示「已中止 · 解绑图库」）
-      await indexFile.deactivateLibrary();
+      try {
+        await indexFile.deactivateLibrary();
+      } catch (err) {
+        toast(err instanceof Error ? err.message : String(err));
+        return;
+      }
     }
     await binding.unbindLibrary(libraryId);
     set((s) => {
@@ -1119,8 +1136,10 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
       : undefined;
     if (!entry) return;
     // 后台重扫：phase 保持 ready、网格不动；尾部 setState 幂等，与 openEntry
-    // 缓存路径同款注释口径（不 await）；后台扫描不提供暂停，scan.paused 恒 false
-    set({ scan: { ...IDLE_SCAN, running: true } });
+    // 缓存路径同款注释口径（不 await）；后台扫描不提供暂停，scan.paused 恒 false。
+    // 2026-10-24：扫描/分析读数已从工具栏迁到识图小窗，故任务启动时还原 visionDismissed
+    // （口径同下方识图活动处）——否则用户先关掉小窗，重扫后就再也看不到任何进度
+    set({ scan: { ...IDLE_SCAN, running: true }, visionDismissed: false });
     void finishScan(entry);
   },
 
@@ -1229,6 +1248,7 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
     set({ crossLibrary: on });
   },
   setFilterOpen: (open) => set({ filterOpen: open }),
+  setFolderDrawerOpen: (open) => set({ folderDrawerOpen: open }),
   setSearchFocused: (focused) => set({ searchFocused: focused }),
   /** 清空检索/筛选（含以图搜图态与其 objectURL 回收） */
   clearSearchAndFilters: () =>

@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { CanvasPage } from "../modules/canvas/api";
 import { LabPage } from "../modules/lab/api";
-import { LibraryPage } from "../modules/library/api";
+import { LibraryPage, startCollectorBridge } from "../modules/library/api";
 import { SuperResPage } from "../modules/superres/api";
 import { AppShell } from "./components/AppShell";
 import { HelpPage } from "./help/HelpPage";
@@ -22,6 +22,13 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  /**
+   * 浏览器拖拽采集桥（M3，2026-11-12 任务卡）：全局挂一次，不依赖当前路由——
+   * 用户在哪个页面都要能接住浏览器扩展转发过来的落盘请求。
+   * effect 返回的清理函数与挂载对称（StrictMode 下会挂→卸→再挂）。
+   */
+  useEffect(() => startCollectorBridge(), []);
 
   return (
     <BrowserRouter>

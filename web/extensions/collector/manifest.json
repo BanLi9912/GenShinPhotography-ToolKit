@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "原摄工具箱 · 拖拽采集",
+  "version": "1.0.0",
+  "description": "把网页里的图片拖进浮层，直接保存到原摄工具箱参考图库正在浏览的目录或其子目录；只落盘，不自动入索引。",
+  "background": { "service_worker": "background.js" },
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_title": "原摄工具箱 · 拖拽采集",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:5173/*", "http://127.0.0.1:5173/*"],
+      "js": ["tokens.js", "toolkit-bridge.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "exclude_matches": ["http://localhost:5173/*", "http://127.0.0.1:5173/*"],
+      "js": ["tokens.js", "overlay.js", "content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

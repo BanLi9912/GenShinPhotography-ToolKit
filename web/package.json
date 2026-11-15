@@ -11,8 +11,9 @@
   "scripts": {
     "predev": "node scripts/copy-superres-assets.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/copy-superres-assets.mjs",
+    "prebuild": "node scripts/copy-superres-assets.mjs && node scripts/build-collector.mjs",
     "build": "tsc -b && vite build",
+    "build:collector": "node scripts/build-collector.mjs",
     "lint": "oxlint",
     "preview": "vite preview"
   },

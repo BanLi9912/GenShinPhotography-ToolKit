@@ -1,11 +1,12 @@
 /**
  * M3.4 筛选浮层：tag 云（AND/OR）/ 明度 / 冷暖 / 取色（三个取色托盘：取色行/高光/阴影，
  * 每托盘组内 AND/OR + 组间一个 AND/OR；拖拽色片在托盘间移动，Lab 距离 ≤25）/
- * 文件夹树 / 跨图库开关 / 清空全部。锚在工具栏岛下方；浮层外点击或 Esc 关闭
+ * 清空全部。锚在工具栏岛下方；浮层外点击或 Esc 关闭
  * （Esc stopPropagation，不触发页面级 Esc）。
+ * 文件夹树 2026-10-17 迁出到左侧浮层（见 FolderDrawer：贴左缘静止片刻弹出），
+ * 本浮层不再有「文件夹」一节。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { LibraryIndexItem } from "../index/indexFile";
+import { useEffect, useRef, useState } from "react";
 import type { ColorFilter } from "../search/rank";
 import { useLibraryStore, type Tone, type Warmth } from "../store";
 import { TagCloud } from "./TagCloud";
@@ -77,109 +78,16 @@ function ColorAddInput({
   );
 }
 
-interface FolderNode {
-  name: string;
-  path: string;
-  count: number;
-  children: FolderNode[];
-}
-
-function buildFolderTree(items: LibraryIndexItem[]): FolderNode[] {
-  const roots: FolderNode[] = [];
-  const map = new Map<string, FolderNode>();
-  for (const item of items) {
-    const parts = item.relPath.split("/");
-    parts.pop(); // 末段是文件名
-    let path = "";
-    for (const part of parts) {
-      path = path ? `${path}/${part}` : part;
-      let node = map.get(path);
-      if (!node) {
-        node = { name: part, path, count: 0, children: [] };
-        map.set(path, node);
-        if (path === part) {
-          roots.push(node);
-        } else {
-          map.get(path.slice(0, path.lastIndexOf("/")))?.children.push(node);
-        }
-      }
-      node.count += 1;
-    }
-  }
-  return roots;
-}
-
-function FolderNodeRow({
-  node,
-  depth,
-  expandedSet,
-  folderScope,
-  onTogglePath,
-  onSelect,
-}: {
-  node: FolderNode;
-  depth: number;
-  expandedSet: Set<string>;
-  folderScope: string | null;
-  onTogglePath: (path: string) => void;
-  onSelect: (path: string) => void;
-}) {
-  const hasChildren = node.children.length > 0;
-  return (
-    <>
-      <div className="lib-filter__folder-row" style={{ paddingLeft: 8 + depth * 14 }}>
-        {hasChildren ? (
-          <button
-            type="button"
-            className="lib-filter__folder-caret"
-            aria-label={expandedSet.has(node.path) ? "折叠" : "展开"}
-            onClick={() => onTogglePath(node.path)}
-          >
-            {expandedSet.has(node.path) ? "▾" : "▸"}
-          </button>
-        ) : (
-          <span className="lib-filter__folder-caret lib-filter__folder-caret--empty" />
-        )}
-        <button
-          type="button"
-          className={
-            "lib-filter__folder-name" + (folderScope === node.path ? " is-active" : "")
-          }
-          onClick={() => onSelect(node.path)}
-        >
-          {node.name} ×{node.count}
-        </button>
-      </div>
-      {expandedSet.has(node.path) &&
-        node.children.map((child) => (
-          <FolderNodeRow
-            key={child.path}
-            node={child}
-            depth={depth + 1}
-            expandedSet={expandedSet}
-            folderScope={folderScope}
-            onTogglePath={onTogglePath}
-            onSelect={onSelect}
-          />
-        ))}
-    </>
-  );
-}
-
 export function FilterBar() {
   const filterOpen = useLibraryStore((s) => s.filterOpen);
   const setFilterOpen = useLibraryStore((s) => s.setFilterOpen);
-  const items = useLibraryStore((s) => s.items);
   const toneFilter = useLibraryStore((s) => s.toneFilter);
   const setToneFilter = useLibraryStore((s) => s.setToneFilter);
   const warmthFilter = useLibraryStore((s) => s.warmthFilter);
   const setWarmthFilter = useLibraryStore((s) => s.setWarmthFilter);
   const colorFilter = useLibraryStore((s) => s.colorFilter);
   const setColorFilter = useLibraryStore((s) => s.setColorFilter);
-  const folderScope = useLibraryStore((s) => s.folderScope);
-  const setFolderScope = useLibraryStore((s) => s.setFolderScope);
   const clearSearchAndFilters = useLibraryStore((s) => s.clearSearchAndFilters);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   /** 拖拽态：源托盘 + 拖动的色值（HTML5 DnD 用组件状态传递，不依赖 dataTransfer 读取） */
   const [drag, setDrag] = useState<{ from: ColorTrayKey; hex: string } | null>(
     null,
@@ -190,7 +98,6 @@ export function FilterBar() {
   const [leaving, setLeaving] = useState(false);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const tree = useMemo(() => buildFolderTree(items), [items]);
 
   // 下拉动画编排（口径同 LibraryPage 的 BatchPanel/DetailView 挂载模式）
   useEffect(() => {
@@ -233,13 +140,6 @@ export function FilterBar() {
 
   if (!mounted) return null;
 
-  const toggleExpanded = (path: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
 
   /** 向托盘追加颜色（去重；小写统一） */  const addColor = (tray: ColorTrayKey, hex: string) => {
     const cur = colorFilter ?? EMPTY_FILTER;
@@ -480,39 +380,6 @@ export function FilterBar() {
                 </div>
               );
             })}
-          </div>
-        </section>
-
-        <section className="lib-filter__section">
-          <header className="lib-filter__section-head">
-            <span className="lib-filter__section-title">文件夹</span>
-          </header>
-          <div className="lib-filter__folder">
-            <div className="lib-filter__folder-row">
-              <span className="lib-filter__folder-caret lib-filter__folder-caret--empty" />
-              <button
-                type="button"
-                className={
-                  "lib-filter__folder-name" + (folderScope === null ? " is-active" : "")
-                }
-                onClick={() => setFolderScope(null)}
-              >
-                全部
-              </button>
-            </div>
-            {tree.map((node) => (
-              <FolderNodeRow
-                key={node.path}
-                node={node}
-                depth={0}
-                expandedSet={expanded}
-                folderScope={folderScope}
-                onTogglePath={toggleExpanded}
-                onSelect={(path) =>
-                  setFolderScope(folderScope === path ? null : path)
-                }
-              />
-            ))}
           </div>
         </section>
 
