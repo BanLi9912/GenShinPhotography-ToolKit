@@ -370,6 +370,12 @@ function tagsChanged(prev: LibraryTag[], next: LibraryTag[]): boolean {
   return false;
 }
 
+/** 扫描完成后当前索引中的图片数，供图库内的导入流程确认目标与结果。 */
+export interface LibraryScanResult {
+  libraryId: string;
+  itemCount: number;
+}
+
 interface LibraryState {
   /** 注册表摘要（无 handle；itemCount 来自 meta.json stats.files） */
   libraries: LibrarySummary[];
@@ -451,11 +457,13 @@ interface LibraryState {
   /** 批量识图确认请求（BatchPanel 快照；确认/取消后置 null） */
   visionBatchRequest: VisionBatchRequest | null;
   init: () => Promise<void>;
-  bindNewLibrary: () => Promise<void>;
+  /** 从用户手势打开目录选择器，绑定并等待扫描。取消、失败或切库返回 null。 */
+  bindNewLibrary: () => Promise<LibraryScanResult | null>;
   authorizeCurrent: () => Promise<void>;
   switchTo: (libraryId: string) => Promise<void>;
   unbind: (libraryId: string) => Promise<void>;
-  rescan: () => Promise<void>;
+  /** 增量扫描。可指定预期的当前图库，目标不符、正在扫描或扫描失败时返回 null。 */
+  rescan: (expectedLibraryId?: string) => Promise<LibraryScanResult | null>;
   pauseScan: () => void;
   resumeScan: () => void;
   pauseAnalysis: () => void;
@@ -623,40 +631,49 @@ async function launchVision(opts?: {
   }
 }
 
-/** 扫描尾部：等扫描结束（含收尾落盘）后刷新条目与计数，置 ready */
+/** 扫描完成后刷新条目与计数，置 ready。索引保存与基础分析在后台完成。 */
 async function finishScan(
   entry: LibraryRegistryEntry,
   opts?: {
     /** 打开新图库路径：识图总开关开启时不自动跑，改弹小窗确认（重扫不弹） */
     askVisionConfirm?: boolean;
   },
-): Promise<void> {
+): Promise<LibraryScanResult | null> {
+  const generation = indexFile.currentGeneration();
+  const isCurrentScan = () =>
+    indexFile.currentGeneration() === generation &&
+    useLibraryStore.getState().current?.libraryId === entry.libraryId;
+
   try {
     await startScan(entry.handle, {
-      onProgress: (progress: ScanProgress) =>
-        useLibraryStore.setState({ scan: { ...progress, running: true } }),
-      isPaused: () => useLibraryStore.getState().scan.paused,
+      onProgress: (progress: ScanProgress) => {
+        if (isCurrentScan()) {
+          useLibraryStore.setState({ scan: { ...progress, running: true } });
+        }
+      },
+      isPaused: () => isCurrentScan() && useLibraryStore.getState().scan.paused,
     });
   } catch (err) {
     // 目录缺失/移动/断开：句柄可能仍持「授权」但 IO 全挂——置 missing 态，
     // 让用户「重新定位目录」（bindNewLibrary 按 meta.libraryId 对位）或移除绑定
     console.error("[library] 扫描失败（目录可能已不可访问）", err);
     const st = useLibraryStore.getState();
-    if (st.current?.libraryId !== entry.libraryId) return;
+    if (!isCurrentScan()) return null;
     useLibraryStore.setState({
       phase: "missing",
       scan: { ...st.scan, running: false },
     });
-    return;
+    return null;
   }
   const state = useLibraryStore.getState();
   // 扫描期间已切换/解绑图库则不再覆盖状态（indexFile 代次守卫已停扫）
-  if (state.current?.libraryId !== entry.libraryId) return;
+  if (!state.current || !isCurrentScan()) return null;
+  const result = { libraryId: entry.libraryId, itemCount: indexFile.getItemCount() };
   useLibraryStore.setState({
     items: indexFile.listItems(),
     current: {
       ...state.current,
-      itemCount: indexFile.getItemCount(),
+      itemCount: result.itemCount,
     },
     scan: { ...state.scan, running: false },
     analysis: { ...IDLE_ANALYSIS, running: true },
@@ -676,6 +693,7 @@ async function finishScan(
   let lastItemsRefresh = 0;
   void runAnalysisQueue(entry.handle, {
     onProgress: (progress: AnalysisProgress) => {
+      if (!isCurrentScan()) return;
       const patch: Partial<LibraryState> = {
         analysis: { ...progress, running: true },
       };
@@ -688,12 +706,12 @@ async function finishScan(
       }
       useLibraryStore.setState(patch);
     },
-    isPaused: () => useLibraryStore.getState().analysis.paused,
+    isPaused: () => isCurrentScan() && useLibraryStore.getState().analysis.paused,
   })
     .then(async ({ failed }) => {
       const st = useLibraryStore.getState();
       // 分析期间已切换/解绑图库则不再覆盖状态（indexFile 代次守卫已停队列）
-      if (st.current?.libraryId !== entry.libraryId) return;
+      if (!isCurrentScan()) return;
       useLibraryStore.setState({
         items: indexFile.listItems(),
         analysis: { ...st.analysis, running: false, failed },
@@ -705,6 +723,7 @@ async function finishScan(
       // （避免「173/173 还问确认」的空弹，也避免面板直接消失——2026-08-21 用户反馈）；
       // 总开关关闭时维持原静默串联（守卫拦截不弹窗）
       const global = await loadVisionGlobal();
+      if (!isCurrentScan()) return;
       if (opts?.askVisionConfirm) {
         if (global.enabled) {
           const all = indexFile.listItems();
@@ -785,11 +804,12 @@ async function finishScan(
     .catch((err) => {
       console.error("[library] 分析队列异常", err);
       const st = useLibraryStore.getState();
-      if (st.current?.libraryId !== entry.libraryId) return;
+      if (!isCurrentScan()) return;
       useLibraryStore.setState({
         analysis: { ...st.analysis, running: false },
       });
     });
+  return result;
 }
 
 /**
@@ -834,7 +854,7 @@ async function cleanupTmpResidue(dir: FileSystemDirectoryHandle): Promise<void> 
 async function openEntry(
   entry: LibraryRegistryEntry,
   opts?: { askVisionConfirm?: boolean },
-): Promise<void> {
+): Promise<LibraryScanResult | null> {
   // 切库/打开前中止旧库识图并复位 vision 状态（双保险，代次守卫已兜）；
   // M3.5.3.4 中止原因逐字透传（小窗显示「已中止 · 切换或打开图库」）
   abortVisionRun("切换或打开图库");
@@ -878,12 +898,9 @@ async function openEntry(
         pendingDetailId: null,
       });
     }
-    // 扫描转后台增量：不 await（finishScan 尾部会再置 ready/items/analysis，
-    // 幂等无害）；后台扫描不提供暂停，scan.paused 恒 false
-    void finishScan(entry, opts);
-    return;
   }
-  await finishScan(entry, opts);
+  // 缓存网格已显示，调用方仍可以等待增量扫描结果。
+  return finishScan(entry, opts);
 }
 
 /**
@@ -989,31 +1006,30 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
 
   /** 绑定新文件夹（按钮 = 用户手势入口） */
   bindNewLibrary: async () => {
+    const previousPhase = get().phase;
+    if (previousPhase === "binding" || previousPhase === "scanning") return null;
     set({ phase: "binding" });
     let entry: LibraryRegistryEntry | null = null;
     try {
       entry = await binding.bindNewLibrary();
       if (!entry) {
         // 用户取消：回到原有状态（missing 态保持——取消重新定位仍停留在错误提示页）
-        set((s) => ({
-          phase: s.phase === "missing" ? "missing" : s.current ? "ready" : "unbound",
-        }));
-        return;
+        if (get().phase === "binding") set({ phase: previousPhase });
+        return null;
       }
       set({ libraries: await binding.refreshSummaries() });
-      await openEntry(entry, { askVisionConfirm: true });
+      return await openEntry(entry, { askVisionConfirm: true });
     } catch (err) {
       // F1：openEntry 的索引读失败中止与绑定本身的异常同款处理——toast 提示 + 回原 phase；
       // 旧库同样已在 openEntry 内被 deactivate，故 best-effort 重新激活（同 switchTo）
       console.error("[library] 绑定失败", err);
       toast(err instanceof Error ? err.message : String(err));
-      set((s) => ({
-        phase: s.phase === "missing" ? "missing" : s.current ? "ready" : "unbound",
-      }));
+      if (get().phase === "binding") set({ phase: previousPhase });
       // 绑定本身失败（entry 尚未拿到）时无需重激活——此时还没人 deactivate 旧库
       if (entry && (await recoverActiveLibrary(entry)) === "failed") {
         toast("当前图库状态异常，请刷新页面");
       }
+      return null;
     }
   },
 
@@ -1130,17 +1146,19 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
   },
 
   /** 当前图库重新扫描（增量比对）：重扫后台化（M3.2.3），不再跳阻塞扫描页 */
-  rescan: async () => {
-    const entry = get().current
-      ? binding.getEntry(get().current!.libraryId)
-      : undefined;
-    if (!entry) return;
-    // 后台重扫：phase 保持 ready、网格不动；尾部 setState 幂等，与 openEntry
-    // 缓存路径同款注释口径（不 await）；后台扫描不提供暂停，scan.paused 恒 false。
+  rescan: async (expectedLibraryId) => {
+    const { current, phase, scan } = get();
+    if (!current || phase !== "ready" || scan.running) return null;
+    if (expectedLibraryId !== undefined && current.libraryId !== expectedLibraryId) {
+      return null;
+    }
+    const entry = binding.getEntry(current.libraryId);
+    if (!entry || !indexFile.isActiveDirectory(entry.handle)) return null;
+    // 后台重扫保持 ready 和现有网格，调用方可等待索引刷新。
     // 2026-10-24：扫描/分析读数已从工具栏迁到识图小窗，故任务启动时还原 visionDismissed
     // （口径同下方识图活动处）——否则用户先关掉小窗，重扫后就再也看不到任何进度
     set({ scan: { ...IDLE_SCAN, running: true }, visionDismissed: false });
-    void finishScan(entry);
+    return finishScan(entry);
   },
 
   pauseScan: () => set((s) => ({ scan: { ...s.scan, paused: true } })),

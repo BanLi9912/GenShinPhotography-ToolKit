@@ -13,6 +13,7 @@ export { LibraryPage } from "./components/LibraryPage";
 export { LibraryGlobalSettingsPanel } from "./components/GlobalSettingsPanel";
 export { LibraryRegistryPanel } from "./components/LibraryRegistryPanel";
 export { useLibraryStore } from "./store";
+export type { LibraryScanResult } from "./store";
 export { ensureEntryPermission, getEntry, listSummaries } from "./index/binding";
 export type { LibraryRegistryEntry } from "./index/binding";
 /**

@@ -373,6 +373,11 @@ export function currentGeneration(): number {
   return generation;
 }
 
+/** 目录句柄与已加载的索引匹配时，才允许重扫。 */
+export function isActiveDirectory(dir: FileSystemDirectoryHandle): boolean {
+  return activeDir === dir && indexMap !== null;
+}
+
 /**
  * 载入图库到内存（打开/切换时调用）：读 meta + index，全量驻留 Map。
  * meta 缺失/损坏按未初始化处理（内存造默认值，与磁盘原值不同才标 dirty）；

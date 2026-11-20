@@ -171,9 +171,11 @@ export async function startScan(
 
     if (done % 50 === 0) {
       await yieldToUI();
+      if (currentGeneration() !== gen) return;
       while (callbacks.isPaused()) {
         callbacks.onProgress(toProgress(0, done, stamps, true));
         await sleep(500);
+        if (currentGeneration() !== gen) return;
       }
     }
     // 250ms 时间闸（进度真实化：慢扫/快扫都保持反馈节奏，速度不再被条数截断）
@@ -183,6 +185,8 @@ export async function startScan(
       lastReport = now;
     }
   }
+
+  if (currentGeneration() !== gen) return;
 
   // 防误删护栏（M3.2.3）：本次枚举到 0 个文件但缓存非空 → 疑似目录枚举
   // 异常/权限抖动（云盘/权限瞬态），跳过整个消失删除，避免索引被整库误删
