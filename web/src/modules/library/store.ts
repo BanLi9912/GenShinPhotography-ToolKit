@@ -10,8 +10,14 @@ import { ensurePermission, isFsaSupported } from "../../core/storage/fsa";
 import { toast } from "../../ui/toast";
 import * as binding from "./index/binding";
 import * as indexFile from "./index/indexFile";
-import { startScan, type ScanProgress } from "./index/scan";
-import { makeThumb } from "./pipeline/thumbs";
+import { startScan, type ScanOutcome, type ScanProgress } from "./index/scan";
+import { makeThumb, sweepOrphanThumbs, thumbWritesInflight } from "./pipeline/thumbs";
+import { confirmDialog } from "../../ui/confirm";
+import {
+  collectSubtreeItems,
+  normalizeSplitPath,
+  splitIntoLibrary,
+} from "./index/splitFolder";
 import {
   runAnalysisQueue,
   type AnalysisProgress,
@@ -430,6 +436,11 @@ interface LibraryState {
   /** 仅标星筛选（搜索行星标按钮；清空全部/切库时复位） */
   starredOnly: boolean;
   folderScope: string | null;
+  /**
+   * 正在生成的子库目标目录（相对根）；null = 空闲。
+   * 用于「拆分为独立图库…」的防重复（写入期间按钮保持禁用）。
+   */
+  splittingTarget: string | null;
   /** 跨图库搜索开关（PR-007：用户偏好，持久化于 localStorage，不在 CLEARED_SEARCH 内） */
   crossLibrary: boolean;
   /** 跨库结果内存态（PR-007：CrossResults 计算写入；不持久化、不进复位快照） */
@@ -464,6 +475,11 @@ interface LibraryState {
   unbind: (libraryId: string) => Promise<void>;
   /** 增量扫描。可指定预期的当前图库，目标不符、正在扫描或扫描失败时返回 null。 */
   rescan: (expectedLibraryId?: string) => Promise<LibraryScanResult | null>;
+  /**
+   * 把一个已登记子目录连同后代生成独立图库索引（2026-11-18 任务卡 §4 B）。
+   * 只写子目录的 .ystk（index.json + meta.json），不搬原图、不改父库、不切库。
+   */
+  splitFolderToLibrary: (targetPath: string) => Promise<void>;
   pauseScan: () => void;
   resumeScan: () => void;
   pauseAnalysis: () => void;
@@ -644,8 +660,9 @@ async function finishScan(
     indexFile.currentGeneration() === generation &&
     useLibraryStore.getState().current?.libraryId === entry.libraryId;
 
+  let outcome: ScanOutcome | null = null;
   try {
-    await startScan(entry.handle, {
+    outcome = await startScan(entry.handle, {
       onProgress: (progress: ScanProgress) => {
         if (isCurrentScan()) {
           useLibraryStore.setState({ scan: { ...progress, running: true } });
@@ -679,6 +696,17 @@ async function finishScan(
     analysis: { ...IDLE_ANALYSIS, running: true },
     phase: "ready",
   });
+
+  // 网格已经就绪，才开始动磁盘：回收消失图片留下的正式缩略图（2026-11-18 任务卡 §4 A）。
+  // 只有「完整成功」的扫描才调度——取消/换库（cancelled）与零文件防误删（guarded）都不许清，
+  // 抛错的扫描走上面的 catch 分支，同样不会到这里。
+  if (outcome?.status === "complete") {
+    void runThumbGc(entry);
+  } else {
+    console.warn(
+      `[library] 本次扫描未完整成功（${outcome?.status ?? "异常"}），跳过缩略图清理`,
+    );
+  }
 
   // 跨库点击：目标库扫描完成后自动打开该图详情（存在才开，否则只清 pending）
   const pending = state.pendingDetailId;
@@ -850,6 +878,49 @@ async function cleanupTmpResidue(dir: FileSystemDirectoryHandle): Promise<void> 
   }
 }
 
+/** 同库清理互斥：一个库同一时刻只跑一轮（不同库是不同目录，互不干扰） */
+const thumbGcRuns = new Set<string>();
+
+/**
+ * 孤儿缩略图回收（2026-11-18 任务卡 §4 A，后台执行、不阻塞网格）。
+ *
+ * 四道闸，任一不过就一个文件都不删：
+ * ① 引用集合来自「已确认落盘 + 与内存逐条一致」的索引（readSavedThumbRefs 自己会等保存队列）；
+ * ② 同一库互斥，重复触发不叠加；
+ * ③ 库代次或图库身份变了立刻停手（过期候选全部放弃，下次完整扫描再收）；
+ * ④ 索引又变脏 / 有在飞缩略图写 → 本批不删（防误删「文件已写、thumb 还没更新」的产物）。
+ *
+ * 全部异常只留日志：清理是收尾动作，任何失败都不该影响图库内容。
+ */
+async function runThumbGc(entry: LibraryRegistryEntry): Promise<void> {
+  if (thumbGcRuns.has(entry.libraryId)) return;
+  thumbGcRuns.add(entry.libraryId);
+  try {
+    const generation = indexFile.currentGeneration();
+    const refs = await indexFile.readSavedThumbRefs();
+    if (!refs.ok) {
+      console.warn(`[library] 缩略图清理跳过：${refs.reason}`);
+      return;
+    }
+    const report = await sweepOrphanThumbs(entry.handle, {
+      refs: refs.refs,
+      isStale: () =>
+        indexFile.currentGeneration() !== generation ||
+        useLibraryStore.getState().current?.libraryId !== entry.libraryId,
+      isBusy: () => indexFile.hasPendingSave() || thumbWritesInflight() > 0,
+    });
+    if (report.status === "busy") {
+      console.warn("[library] 缩略图清理中途停手：索引仍在写入，候选留给下次完整扫描");
+    } else if (report.status === "stale") {
+      console.warn("[library] 缩略图清理中途停手：图库已切换");
+    }
+  } catch (err) {
+    console.warn("[library] 缩略图清理异常（不影响图库内容，下次完整扫描会再收）", err);
+  } finally {
+    thumbGcRuns.delete(entry.libraryId);
+  }
+}
+
 /** 打开图库：激活索引 → 缓存分流（优先直接出网格/否则阻塞扫描）→ 全量扫描 */
 async function openEntry(
   entry: LibraryRegistryEntry,
@@ -945,6 +1016,7 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
   settingsOpen: false,
   visionWidgetOpen: false,
   visionBatchRequest: null,
+  splittingTarget: null,
   sortKey: "mtime",
   sortDir: "desc",
   selectedIds: new Set<string>(),
@@ -1159,6 +1231,105 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
     // （口径同下方识图活动处）——否则用户先关掉小窗，重扫后就再也看不到任何进度
     set({ scan: { ...IDLE_SCAN, running: true }, visionDismissed: false });
     return finishScan(entry);
+  },
+
+  /**
+   * 把一个已登记子目录连同后代生成独立图库索引（2026-11-18 任务卡 §4 B）。
+   *
+   * 顺序：确认扫描结束 → 取「已落盘且与内存一致」的快照 → 计数 → 公共确认框 → 复核快照
+   * 没变 → 写入子库（标记 → index.json → 回读 → meta.json → 回读 → 清标记）。
+   * 不搬原图、不改父库记录、不注册注册表、不切库；失败只 toast，父库内容一字不动。
+   */
+  splitFolderToLibrary: async (targetPath) => {
+    const state = get();
+    const current = state.current;
+    if (!current) return;
+    if (state.splittingTarget) return; // 串行：上一次还没写完（按钮同时是禁用态）
+    const path = normalizeSplitPath(targetPath);
+    if (!path) {
+      toast("目录路径不合法，已取消拆分");
+      return;
+    }
+    if (state.scan.running || state.phase === "scanning") {
+      toast("扫描完成后可拆分");
+      return;
+    }
+    const entry = binding.getEntry(current.libraryId);
+    if (!entry) {
+      toast("找不到当前图库的目录句柄，请刷新页面后重试");
+      return;
+    }
+
+    // 快照只能来自「已落盘 + 与内存一致」的索引：父库保存失败/被外部改动时给可读原因
+    const snapshot = await indexFile.readSavedIndex();
+    if (!snapshot.ok) {
+      toast(`拆分已取消：${snapshot.reason}`);
+      return;
+    }
+    const subtree = collectSubtreeItems(snapshot.items, path);
+    if (subtree.length === 0) {
+      toast(`「${path}」下没有已登记的图片，无需拆分`);
+      return;
+    }
+    const count = subtree.length;
+    const generationAtStart = indexFile.currentGeneration();
+    const directoryName = path.split("/").pop() ?? path;
+    const emptyWarning =
+      count === snapshot.items.length
+        ? "\n\n注意：这次范围是整个图库的全部图片。搬走后原库将为空——重新扫描会保留旧索引，可在图库列表移除原库绑定。"
+        : "";
+    const ok = await confirmDialog({
+      title: "拆分为独立图库？",
+      message:
+        `将为『${path}』及其子目录中的 ${count} 张图片生成独立图库索引，` +
+        "保留识图结果、标签、备注和收藏。生成后，请在文件资源管理器中移走整个文件夹。" +
+        emptyWarning,
+      confirmText: "生成独立图库",
+      cancelText: "取消",
+    });
+    if (!ok) return;
+
+    // 确认期间图库被切换、或索引又变了 → 一个字节都不写（宁可让用户重来，也不写错快照）
+    if (
+      indexFile.currentGeneration() !== generationAtStart ||
+      get().current?.libraryId !== current.libraryId
+    ) {
+      toast("图库已切换，拆分已取消");
+      return;
+    }
+    const after = await indexFile.readSavedIndex();
+    if (!after.ok) {
+      toast(`拆分已取消：${after.reason}`);
+      return;
+    }
+    const again = collectSubtreeItems(after.items, path);
+    if (again.length !== count) {
+      toast(`「${path}」的登记数已从 ${count} 变为 ${again.length}，请重新点一次拆分`);
+      return;
+    }
+
+    set({ splittingTarget: path });
+    try {
+      const result = await splitIntoLibrary({
+        parentDir: entry.handle,
+        parentLibraryId: current.libraryId,
+        targetPath: path,
+        items: again,
+        parentSettings: indexFile.getSettings(),
+        isStale: () =>
+          indexFile.currentGeneration() !== generationAtStart ||
+          get().current?.libraryId !== current.libraryId,
+      });
+      toast(
+        `已生成 ${result.count} 张图片的图库索引。请将整个『${directoryName}』移出原图库，` +
+          "在新位置绑定，然后重新扫描原图库。",
+      );
+    } catch (err) {
+      console.error("[library] 拆分生成独立图库失败", err);
+      toast(err instanceof Error ? err.message : String(err));
+    } finally {
+      set({ splittingTarget: null });
+    }
   },
 
   pauseScan: () => set((s) => ({ scan: { ...s.scan, paused: true } })),

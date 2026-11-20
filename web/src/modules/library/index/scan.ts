@@ -39,6 +39,20 @@ export interface ScanCallbacks {
   isPaused: () => boolean;
 }
 
+/**
+ * 扫描结局（2026-11-18 任务卡 §4 A1）：只有 `complete` 允许后续调度缩略图清理。
+ * - cancelled：扫描途中图库被切走/解绑（代次变了），本次比对作废；
+ * - guarded：枚举到 0 个文件但缓存非空 → 防误删护栏触发，消失删除整段跳过；
+ * 抛错（目录失联等）由调用方 catch，不在此表达。
+ */
+export interface ScanOutcome {
+  status: "complete" | "cancelled" | "guarded";
+  /** 本次枚举到的图片文件数 */
+  enumerated: number;
+  /** 因「消失」而删除的条目数 */
+  deleted: number;
+}
+
 function isImage(relPath: string): boolean {
   const dot = relPath.lastIndexOf(".");
   if (dot < 0) return false;
@@ -83,7 +97,7 @@ function toProgress(
 export async function startScan(
   dir: FileSystemDirectoryHandle,
   callbacks: ScanCallbacks,
-): Promise<void> {
+): Promise<ScanOutcome> {
   const gen = currentGeneration();
   // 单遍扫描：total 未知（0）；先报一次消灭无反馈期
   callbacks.onProgress({ total: 0, done: 0, perSecond: 0, paused: callbacks.isPaused() });
@@ -108,7 +122,9 @@ export async function startScan(
   }[] = [];
 
   for await (const entry of walkDirectory(dir)) {
-    if (currentGeneration() !== gen) return; // 图库已切换/解绑，放弃本次扫描
+    if (currentGeneration() !== gen) {
+      return { status: "cancelled", enumerated: done, deleted: 0 }; // 图库已切换/解绑，放弃本次扫描
+    }
     if (!isImage(entry.relPath)) continue;
     done += 1;
     stamps.push(Date.now());
@@ -171,11 +187,11 @@ export async function startScan(
 
     if (done % 50 === 0) {
       await yieldToUI();
-      if (currentGeneration() !== gen) return;
+      if (currentGeneration() !== gen) return { status: "cancelled", enumerated: done, deleted: 0 };
       while (callbacks.isPaused()) {
         callbacks.onProgress(toProgress(0, done, stamps, true));
         await sleep(500);
-        if (currentGeneration() !== gen) return;
+        if (currentGeneration() !== gen) return { status: "cancelled", enumerated: done, deleted: 0 };
       }
     }
     // 250ms 时间闸（进度真实化：慢扫/快扫都保持反馈节奏，速度不再被条数截断）
@@ -186,19 +202,22 @@ export async function startScan(
     }
   }
 
-  if (currentGeneration() !== gen) return;
+  if (currentGeneration() !== gen) return { status: "cancelled", enumerated: done, deleted: 0 };
 
   // 防误删护栏（M3.2.3）：本次枚举到 0 个文件但缓存非空 → 疑似目录枚举
   // 异常/权限抖动（云盘/权限瞬态），跳过整个消失删除，避免索引被整库误删
   // （ready 空网格同为黑屏候选根因之一）；正常枚举下的真消失删除不受影响
   let deletedCount = 0;
+  const guarded = done === 0 && byRelPath.size > 0;
   if (done === 0 && byRelPath.size > 0) {
     console.error(
       `[library] 本次扫描枚举到 0 个文件但缓存非空（疑似目录枚举异常/权限抖动），已跳过消失删除，保留全部 ${byRelPath.size} 条`,
     );
   } else {
     for (const item of disappeared.values()) {
-      if (currentGeneration() !== gen) return;
+      if (currentGeneration() !== gen) {
+        return { status: "cancelled", enumerated: done, deleted: deletedCount };
+      }
       removeItem(item.id);
       deletedCount += 1;
     }
@@ -239,4 +258,5 @@ export async function startScan(
   // 落盘失败只记日志，startScan 在满格上报后同步返回（ready 永远不许等磁盘）
   callbacks.onProgress(toProgress(done, done, stamps, callbacks.isPaused()));
   void flush().catch((err) => console.error("[library] 扫描收尾落盘失败", err));
+  return { status: guarded ? "guarded" : "complete", enumerated: done, deleted: deletedCount };
 }

@@ -29,8 +29,17 @@ const KEY_LAST_TASK = "lastTask";
 const KEY_OVERLAY_TABS = "overlayTabs";
 const KEY_ENABLED = "collectorEnabled";
 
-/** 当前活跃保存（同一时刻只允许一张图；MV3 重启后自然清空，旧的只会变成"结果未确认"） */
-let activeJob = null;
+/**
+ * 队列里还有几张（含正在跑的这张）。2026-11-18 用户口径：松手即关浮层，
+ * 取图与写盘全交给后台 —— 于是"上一张还在保存"不能再挡人，改成排队串行；
+ * 队列满才明确回 BUSY，不静默丢图。
+ */
+let queuedSaves = 0;
+const MAX_PENDING_SAVES = 6;
+/** 串行链：上一条彻底结束（含失败）才起下一条 */
+let saveChain = Promise.resolve();
+/** 在途去重键（目标目录 + 源地址）：同一次拖拽被重复投递时只存一份 */
+const inFlightSaves = new Set();
 /** 打开着采集浮层的标签页（目标变化时推作废通知） */
 const overlayTabs = new Set();
 
@@ -217,8 +226,14 @@ function sniffImageType(bytes) {
   if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "webp";
   if (b[0] === 0x42 && b[1] === 0x4d) return "bmp";
   if (ascii(4, 8) === "ftyp") {
-    const brand = ascii(8, 12);
-    if (brand === "avif" || brand === "avis") return "avif";
+    const major = ascii(8, 12);
+    if (major === "avif" || major === "avis") return "avif";
+    // 真实 AVIF 很常见是 ftyp mif1/msf1 + 兼容 brand 里带 avif（只认主 brand 会误杀）
+    const boxSize = Math.min((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3], b.length);
+    for (let offset = 16; offset + 4 <= boxSize; offset += 4) {
+      const compatible = ascii(offset, offset + 4);
+      if (compatible === "avif" || compatible === "avis") return "avif";
+    }
   }
   return null;
 }
@@ -328,6 +343,102 @@ async function loadImage(src, deadline) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 候选挑选：原图优先，像素面积说了算
+ * ------------------------------------------------------------------ */
+
+const MIME_BY_EXT = {
+  jpg: "image/jpeg",
+  png: "image/png",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  avif: "image/avif",
+};
+
+/** 长边 ≥ 1600 就算高清：够了就停，不再多抓候选（守住 60s 保存预算） */
+const GOOD_ENOUGH_AREA = 1600 * 1600;
+/** 一次保存最多试几张候选（content.js 也按 4 条截断，这里兜底） */
+const MAX_CANDIDATES = 4;
+
+/** 候选去重/裁剪：主地址排第一，其余按 content.js 给的"更像原图"顺序 */
+function normalizeCandidates(raw, primary) {
+  const list = [];
+  const push = (value) => {
+    if (typeof value !== "string" || !value) return;
+    if (list.includes(value) || list.length >= MAX_CANDIDATES) return;
+    list.push(value);
+  };
+  push(primary);
+  if (Array.isArray(raw)) {
+    for (const item of raw) push(item);
+  }
+  return list;
+}
+
+/** 解码后像素面积（挑"最大那张"的唯一裁判）；解不了返回 0，退化成按字节数排序 */
+async function pixelAreaOf(bytes, ext) {
+  if (typeof createImageBitmap !== "function") return 0;
+  let bitmap = null;
+  try {
+    bitmap = await createImageBitmap(
+      new Blob([bytes], { type: MIME_BY_EXT[ext] ?? "application/octet-stream" }),
+    );
+    return (bitmap.width || 0) * (bitmap.height || 0);
+  } catch {
+    return 0;
+  } finally {
+    try {
+      bitmap?.close?.();
+    } catch {
+      // 已释放/不支持，忽略
+    }
+  }
+}
+
+/** 末段 `@尺寸后缀` 之前的地址（同源变体判据；没有后缀返回空串） */
+function variantBaseOf(src) {
+  if (typeof src !== "string" || !src) return "";
+  const hashAt = src.indexOf("#");
+  const noHash = hashAt >= 0 ? src.slice(0, hashAt) : src;
+  const queryAt = noHash.indexOf("?");
+  const pathPart = queryAt >= 0 ? noHash.slice(0, queryAt) : noHash;
+  const slash = pathPart.lastIndexOf("/");
+  const head = pathPart.slice(0, slash + 1);
+  const tail = pathPart.slice(slash + 1);
+  const at = tail.indexOf("@");
+  return at > 0 ? `${head}${tail.slice(0, at)}` : "";
+}
+
+/**
+ * 逐个取候选，返回像素面积最大的一张；全失败才抛最后一个错误。
+ * 不按 URL 规则猜"哪条是原图"——规则只用来排序，真正取舍看解码后的像素。
+ * 已经拿到某个地址的原图后，它的 `@尺寸` 变体（必然更小或同尺寸）直接跳过。
+ */
+async function pickImage(candidates, deadline) {
+  let best = null;
+  let lastError = null;
+  for (const candidate of candidates) {
+    if (Date.now() > deadline - 5000) break;
+    const base = variantBaseOf(candidate);
+    // 已拿到某个地址的原图（best.src）时，它的 @尺寸变体不必再抓
+    if (best && base && (best.src === base || best.base === base)) continue;
+    try {
+      const got = await loadImage(candidate, deadline);
+      const area = await pixelAreaOf(got.bytes, got.ext);
+      const next = { ...got, src: candidate, area, base };
+      const bigger =
+        !best || area > best.area || (area === 0 && next.bytes.byteLength > best.bytes.byteLength);
+      if (bigger) best = next;
+      if (area >= GOOD_ENOUGH_AREA) break;
+    } catch (error) {
+      lastError = error?.error ? error : errorOf("INTERNAL", String(error));
+    }
+  }
+  if (best) return best;
+  throw lastError ?? errorOf("INVALID_IMAGE", "没有取到可用的图片");
+}
+
+/* ------------------------------------------------------------------ *
  * 辅助：文件名主干、base64
  * ------------------------------------------------------------------ */
 
@@ -360,14 +471,48 @@ function urlLastSegment(src) {
   }
 }
 
-/** 默认主干：alt → URL 末段 → 页面标题 → 图片 */
-function stemFor(src, alt, pageTitle) {
+/** 作者昵称上限：给主干留够位置（前缀 + 主干一起受 MAX_STEM_CHARS 约束） */
+const MAX_AUTHOR_CHARS = 24;
+
+/** 昵称清洗：去掉零宽/方向控制符（X 上复制来的名字偶尔夹带），压空白、限长 */
+function cleanAuthor(raw) {
+  if (typeof raw !== "string") return "";
+  const text = raw
+    .replace(/[\u200b-\u200f\u202a-\u202e]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  const chars = Array.from(text);
+  return chars.length > MAX_AUTHOR_CHARS
+    ? chars.slice(0, MAX_AUTHOR_CHARS).join("").trim()
+    : text;
+}
+
+/**
+ * 前缀合成：`作者_主干`，总长仍受 MAX_STEM_CHARS 约束（昵称最长 24 → 主干至多 15，
+ * 截断只发生在主干尾部；随机后缀由接收端另加，不在这里）。
+ */
+function joinAuthor(author, stem) {
+  const label = cleanStem(cleanAuthor(author));
+  if (!label) return stem;
+  const budget = MAX_STEM_CHARS - Array.from(label).length - 1;
+  const chars = Array.from(stem);
+  const tail = chars.length > budget ? chars.slice(0, budget).join("").trim() : stem;
+  return tail ? label + "_" + tail : label;
+}
+
+/** 默认主干：alt → URL 末段 → 页面标题 → 图片；有作者昵称（X.com 适配）就加前缀 */
+function stemFor(author, src, alt, pageTitle) {
   const candidates = [alt, urlLastSegment(src), pageTitle];
+  let base = "图片";
   for (const candidate of candidates) {
     const cleaned = cleanStem(candidate ?? "");
-    if (cleaned) return cleaned;
+    if (cleaned) {
+      base = cleaned;
+      break;
+    }
   }
-  return "图片";
+  return joinAuthor(author, base);
 }
 
 function toBase64(bytes) {
@@ -383,8 +528,29 @@ function toBase64(bytes) {
  * 保存流程
  * ------------------------------------------------------------------ */
 
+/** 结果保留在弹窗「上一次采集」里；浮层关得快，失败再给工具栏图标挂个「!」 */
+function reportBadge(task) {
+  try {
+    if (typeof chrome.action?.setBadgeText !== "function") return;
+    if (task.status === "failed" || task.status === "unconfirmed") {
+      void chrome.action.setBadgeText({ text: "!" });
+      void chrome.action.setTitle({
+        title: `原摄工具箱 · 拖拽采集：${task.error?.message ?? "上次保存失败"}`,
+      });
+      return;
+    }
+    if (task.status === "saved") {
+      void chrome.action.setBadgeText({ text: "" });
+      void chrome.action.setTitle({ title: "原摄工具箱 · 拖拽采集" });
+    }
+  } catch {
+    // 无工具栏图标的运行环境（自测/无头）忽略
+  }
+}
+
 async function setLastTask(task) {
   await writeSession(KEY_LAST_TASK, { ...task, at: Date.now() });
+  reportBadge(task);
 }
 
 /** 取消一次已 BEGIN 的会话（尽力而为：超时/失联时页面自己也会按 60 秒清理） */
@@ -393,25 +559,50 @@ async function cancelActive(receiver, saveId) {
   await callPage(receiver.tabId, "CANCEL_SAVE", { saveId }, MESSAGE_TIMEOUT_MS);
 }
 
-async function runSave(payload) {
-  if (activeJob) {
-    return errorOf("BUSY", "上一张还在保存，请稍候再拖");
-  }
+/** 去重键：同一目标目录 + 同一源地址 = 同一次拖拽的重复提交 */
+function saveKeyOf(payload) {
+  return `${payload?.relPath ?? ""}\u0001${payload?.src ?? ""}`;
+}
+
+/**
+ * 入队（串行）：保证"一次拖拽只写一个文件"——
+ * 同一 (目标目录, 源地址) 还在队列里/正在写时，重复提交直接忽略（DUPLICATE）。
+ */
+function enqueueSave(payload) {
   const job = { startedAt: Date.now(), saveId: null, tabId: null };
-  activeJob = job;
-  try {
-    return await performSave(job, payload ?? {});
-  } catch (error) {
-    const message = error?.error?.message ?? error?.message ?? String(error);
-    const code = error?.error?.code ?? "INTERNAL";
-    return errorOf(code, message);
-  } finally {
-    activeJob = null;
+  if (queuedSaves >= MAX_PENDING_SAVES) {
+    return Promise.resolve(
+      errorOf("BUSY", `后台保存队列已满（最多 ${MAX_PENDING_SAVES} 张），这张没有写`),
+    );
   }
+  const key = saveKeyOf(payload ?? {});
+  if (inFlightSaves.has(key)) {
+    return Promise.resolve(errorOf("DUPLICATE", "这张图这次拖拽已经在保存，重复提交已忽略"));
+  }
+  inFlightSaves.add(key);
+  queuedSaves += 1;
+  const run = saveChain.then(async () => {
+    try {
+      return await performSave(job, payload ?? {});
+    } catch (error) {
+      const message = error?.error?.message ?? error?.message ?? String(error);
+      const code = error?.error?.code ?? "INTERNAL";
+      return errorOf(code, message);
+    }
+  });
+  // 链上吞掉异常，避免一次失败卡死后续保存
+  saveChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run.finally(() => {
+    queuedSaves -= 1;
+    inFlightSaves.delete(key);
+  });
 }
 
 async function performSave(job, payload) {
-  const { relPath, src, sourceKind, pageUrl, pageTitle, alt, target } = payload;
+  const { relPath, src, candidates, sourceKind, pageUrl, pageTitle, alt, author, target } = payload;
   if (typeof src !== "string" || src.length === 0) return errorOf("BAD_REQUEST", "缺少图片地址");
   if (typeof relPath !== "string") return errorOf("BAD_REQUEST", "缺少目标目录");
   if (!target || typeof target.instanceId !== "string") {
@@ -460,10 +651,13 @@ async function performSave(job, payload) {
   const deadline = Date.now() + SAVE_BUDGET_MS;
   await setLastTask({ status: "saving", relPath, libraryName: receiver.libraryName ?? "" });
 
-  // 2) 取图（失败即取消，不留半张）
+  // 2) 取图：候选逐个取回、按解码像素面积挑最大的一张（优先原图，失败才回退渲染图）
   let image;
   try {
-    image = await loadImage(src, deadline);
+    image = await pickImage(normalizeCandidates(candidates, src), deadline);
+    console.info(
+      `[ystk-collector] 取图：${image.src}（${image.bytes.byteLength} 字节，${image.area} 像素）`,
+    );
   } catch (error) {
     await cancelActive(receiver, saveId);
     const failure = error?.error ? error : errorOf("INTERNAL", String(error));
@@ -506,7 +700,7 @@ async function performSave(job, payload) {
   const commit = await callPage(
     receiver.tabId,
     "COMMIT_SAVE",
-    { saveId, totalBytes: total, stem: stemFor(src, alt, pageTitle) },
+    { saveId, totalBytes: total, stem: stemFor(author, image.src ?? src, alt, pageTitle) },
     remainder,
   );
   if (commit.ok) {
@@ -589,7 +783,8 @@ async function handlePageMessage(message, sender) {
           data: {
             enabled,
             connected: false,
-            busy: Boolean(activeJob),
+            busy: queuedSaves > 0,
+            queued: queuedSaves,
             target: null,
             blocked: resolved.error,
           },
@@ -603,7 +798,8 @@ async function handlePageMessage(message, sender) {
           data: {
             enabled,
             connected: false,
-            busy: Boolean(activeJob),
+            busy: queuedSaves > 0,
+            queued: queuedSaves,
             target: null,
             blocked: targetResponse.error,
           },
@@ -616,7 +812,8 @@ async function handlePageMessage(message, sender) {
           data: {
             enabled,
             connected: false,
-            busy: Boolean(activeJob),
+            busy: queuedSaves > 0,
+            queued: queuedSaves,
             target: null,
             blocked: blocked ?? { code: "NOT_READY", message: "工具箱还没准备好收图" },
           },
@@ -630,7 +827,8 @@ async function handlePageMessage(message, sender) {
         data: {
           enabled,
           connected: true,
-          busy: Boolean(activeJob),
+          busy: queuedSaves > 0,
+          queued: queuedSaves,
           target: {
             ...target,
             displayPath: displayPathOf(target.libraryName, target.baseRelPath),
@@ -648,8 +846,7 @@ async function handlePageMessage(message, sender) {
     case "collector/save": {
       if (typeof sender.tab?.id !== "number") return errorOf("BAD_REQUEST", "缺少来源标签页");
       if (!(await isEnabled())) return errorOf("BAD_REQUEST", "采集开关已关闭");
-      const result = await runSave(message.payload);
-      return result;
+      return enqueueSave(message.payload);
     }
     case "collector/overlay": {
       if (message.payload?.open === true) rememberOverlayTab(sender.tab?.id);
@@ -689,7 +886,8 @@ async function popupState() {
       receiver,
       candidates,
       lastTask,
-      busy: Boolean(activeJob),
+      busy: queuedSaves > 0,
+      queued: queuedSaves,
     },
   };
 }

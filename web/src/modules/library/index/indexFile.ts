@@ -22,6 +22,7 @@ import {
   readJsonFile,
   readJsonFileEx,
   writeFileAtomic,
+  type JsonReadResult,
 } from "../../../core/storage/fsa";
 import { dismissToast, persistentToast } from "../../../ui/toast";
 import type { RgbHex } from "../../../core/imaging/stats";
@@ -469,6 +470,118 @@ export async function deactivateLibrary(): Promise<void> {
 /** 失败时保留的活动图库不能通过重新激活从磁盘覆盖。 */
 export function hasPendingSave(): boolean {
   return dirty || savePending;
+}
+
+/** 保存是否因「外部修改哨兵」被暂停（F2）：暂停期间磁盘内容不是我们写的，不能当清理依据 */
+export function isSaveBlocked(): boolean {
+  return saveBlocked;
+}
+
+/** `thumbs/<id>.webp` → `<id>.webp`（小写；Windows 文件名比较忽略大小写）；非该格式返回 null */
+function thumbFileNameOf(thumb: unknown): string | null {
+  if (typeof thumb !== "string") return null;
+  const trimmed = thumb.trim();
+  if (!trimmed.startsWith("thumbs/")) return null;
+  const name = trimmed.slice("thumbs/".length);
+  if (!name || name.includes("/")) return null;
+  return name.toLowerCase();
+}
+
+export interface SavedIndexSnapshot {
+  ok: boolean;
+  /** ok=false 时的可读原因（进日志 / 提示） */
+  reason: string;
+  /** 磁盘上那份索引的条目（ok=true 时与内存完全一致） */
+  items: LibraryIndexItem[];
+}
+
+/**
+ * 取「已确认落盘的当前库索引」：等保存队列写完 → 复核无待保存/未被外部修改 →
+ * 重读磁盘 index.json → 逐条与内存快照对齐。任一条不成立返回 ok=false（调用方据此
+ * 跳过清理或取消拆分），绝不让可疑数据参与写/删。
+ *
+ * 为什么不能只看内存：依据必须是「已经真的落盘、且外部没人改过」的那份索引。
+ * 为什么不能只信 flush()：保存超时只结束等待、不放开写锁，那时 savePending 仍为 true。
+ */
+export async function readSavedIndex(): Promise<SavedIndexSnapshot> {
+  const skip = (reason: string): SavedIndexSnapshot => ({
+    ok: false,
+    reason,
+    items: [],
+  });
+  const dir = activeDir;
+  const map = indexMap;
+  if (!dir || !map) return skip("没有打开中的图库");
+  if (saveBlocked) return skip("索引保存已暂停（检测到外部修改），跳过清理");
+
+  // 扫描尾部只做 best-effort flush、保存链超时也会 resolve，都不能当成功凭证：
+  // 这里等队列写完，再用 hasPendingSave() 复核
+  await flush();
+  if (saveBlocked) return skip("索引保存已暂停（检测到外部修改），跳过清理");
+  if (hasPendingSave()) return skip("索引尚未保存成功，跳过清理");
+
+  const generationAtStart = generation;
+  let raw: JsonReadResult<LibraryIndexItem[]>;
+  try {
+    raw = await readJsonFileEx<LibraryIndexItem[]>(dir, ".ystk/index.json");
+  } catch (err) {
+    return skip(`index.json 读取失败：${String(err)}`);
+  }
+  if (raw.status === "missing") return skip("磁盘上没有 index.json");
+  if (raw.status === "error") return skip(`index.json 读取失败：${String(raw.error)}`);
+  if (generation !== generationAtStart || activeDir !== dir) {
+    return skip("读盘期间图库已切换");
+  }
+  if (hasPendingSave()) return skip("读盘期间索引又有新改动，跳过清理");
+
+  const saved: unknown = raw.value;
+  if (!Array.isArray(saved)) return skip("index.json 结构异常（不是数组）");
+  if (saved.length === 0) return skip("索引是空的（可疑空索引），跳过清理");
+  if (saved.length !== map.size) {
+    return skip(`磁盘索引 ${saved.length} 条与内存 ${map.size} 条不一致`);
+  }
+
+  const refs = new Set<string>();
+  const items = saved as LibraryIndexItem[];
+  for (const item of items) {
+    if (!item || typeof item.id !== "string" || typeof item.relPath !== "string") {
+      return skip("index.json 里有条目结构不合法");
+    }
+    const memory = map.get(item.id);
+    if (
+      !memory ||
+      memory.relPath !== item.relPath ||
+      (memory.thumb ?? null) !== (item.thumb ?? null)
+    ) {
+      return skip("磁盘索引与内存条目不一致（期间有编辑或外部改动）");
+    }
+    const name = thumbFileNameOf(item.thumb);
+    if (name) refs.add(name);
+  }
+  return { ok: true, reason: "", items };
+}
+
+export interface SavedThumbRefs {
+  ok: boolean;
+  reason: string;
+  /** 被引用的缩略图文件名（全小写） */
+  refs: Set<string>;
+  /** 参与判定的条目数 */
+  count: number;
+}
+
+/** 缩略图清理的引用集合：建立在 readSavedIndex 的同一份快照上 */
+export async function readSavedThumbRefs(): Promise<SavedThumbRefs> {
+  const snapshot = await readSavedIndex();
+  if (!snapshot.ok) {
+    return { ok: false, reason: snapshot.reason, refs: new Set<string>(), count: 0 };
+  }
+  const refs = new Set<string>();
+  for (const item of snapshot.items) {
+    const name = thumbFileNameOf(item.thumb);
+    if (name) refs.add(name);
+  }
+  return { ok: true, reason: "", refs, count: snapshot.items.length };
 }
 
 export function listItems(): LibraryIndexItem[] {

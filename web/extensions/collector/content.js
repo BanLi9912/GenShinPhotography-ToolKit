@@ -17,11 +17,178 @@
 
   const HELLO_TIMEOUT_MS = 1500;
   const LIST_TIMEOUT_MS = 4500;
-  /** 工具箱侧整次保存上限 60s，这里留 5s 余量，只做兜底不抢先误报 */
-  const SAVE_TIMEOUT_MS = 65000;
+  /** 后台队列最坏情况（6 张 × 单张 60s）留足余量：这里只用于日志口径，不取消真实保存 */
+  const SAVE_TIMEOUT_MS = 300000;
   const REVALIDATE_MS = 5000;
 
   const SUPPORTED_TITLE = "仅支持 http(s) 图片与小于限额的 data:image";
+
+  /* ---------------- 原图候选（2026-11-18 用户反馈：抓到的常是缩略图变体） ---------------- */
+
+  /**
+   * 站点"处理后缀"：B 站等 CDN 用 `<原图>@1280w_1280h_1c.avif` 现生成缩略图，
+   * 去掉 `@...` 才是原图（实测 B 站 new_dyn：`...jpg@1280w_1280h_1c.avif` 只有
+   * 228 KB，去掉后缀的 `...jpg` 是 3.8 MB 的 jpeg 原图）。只认末段里的 `@`，
+   * 避免误伤路径其它部分。
+   */
+  const SIZE_QUERY_RE =
+    /(^|[?&])(x-oss-process|x-image-process|imageMogr2?|resize|thumbnail|w|width|h|height|q|quality|fit|crop)=/i;
+  const IMAGE_PATH_RE = /\.(?:jpe?g|png|webp|gif|bmp|avif|jxl|heic)$/i;
+  /** 网页把原图挂在自定义属性上的常见写法（懒加载多数还是同一张） */
+  const DATA_SRC_ATTRS = [
+    "data-original",
+    "data-original-src",
+    "data-src",
+    "data-full",
+    "data-full-src",
+    "data-large",
+    "data-large-src",
+    "data-zoom-src",
+    "data-raw",
+    "data-image",
+    "data-lazy-src",
+  ];
+  /** 一次保存最多试几张候选：够覆盖"原图 / srcset 最大 / 兜底渲染图"，又不至于拖垮 60s 预算 */
+  const MAX_CANDIDATES = 4;
+
+  /* ---------------- 作者昵称（文件名前缀；先只做 X.com） ---------------- */
+
+  /** 昵称上限：留出主干空间（文件名主干总长 40 字符，见 background.js stemFor） */
+  const MAX_AUTHOR_CHARS = 24;
+  const X_TWEET_SELECTOR = 'article[data-testid="tweet"]';
+  /** 引用推（转推内容）是内嵌的 div，最近的那层才是这张图的作者 */
+  const X_QUOTED_SELECTOR = 'div[data-testid="tweet"]';
+  const X_AUTHOR_SELECTOR = '[data-testid="User-Name"]';
+
+  /** 昵称清洗：去掉零宽/方向控制符，压空白、限长（文件名的禁用字符交给后台统一清洗） */
+  function cleanAuthor(raw) {
+    if (typeof raw !== "string") return "";
+    const text = raw
+      .replace(/[\u200b-\u200f\u202a-\u202e]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return "";
+    const chars = Array.from(text);
+    return chars.length > MAX_AUTHOR_CHARS
+      ? chars.slice(0, MAX_AUTHOR_CHARS).join("").trim()
+      : text;
+  }
+
+  /** 选择器命中后返回第一个非空文本（元素可能一个都没有，一律当"没抓到"） */
+  function firstTextOf(root, selector) {
+    if (!root || typeof root.querySelectorAll !== "function") return "";
+    for (const node of root.querySelectorAll(selector)) {
+      const text = cleanAuthor(node.textContent ?? "");
+      if (text) return text;
+    }
+    return "";
+  }
+
+  /** 作者区整段文本里挖昵称：去掉 @句柄 后剩下的那段（weiei / @weiei483 → weiei） */
+  function nameFromText(text) {
+    const clean = cleanAuthor(text ?? "");
+    if (!clean) return "";
+    return clean.replace(/@[A-Za-z0-9_]{1,15}/g, "").replace(/\s+/g, " ").trim();
+  }
+
+  /** @weiei483 / /weiei483 / https://x.com/weiei483/status/1 → weiei483 */
+  function handleFrom(value) {
+    const text = typeof value === "string" ? value.trim() : "";
+    if (!text) return "";
+    const at = /@([A-Za-z0-9_]{1,15})/.exec(text);
+    if (at) return at[1];
+    const path = /^(?:https?:\/\/[^/]+)?\/([A-Za-z0-9_]{1,15})(?:\/status\/|$)/.exec(text);
+    return path ? path[1] : "";
+  }
+
+  /** 推文里那条 /账号/status/… 链接就是账号的兜底来源（昵称和 @句柄都抓不到时） */
+  function handleFromStatusLink(tweet) {
+    if (!tweet || typeof tweet.querySelectorAll !== "function") return "";
+    for (const anchor of tweet.querySelectorAll('a[href*="/status/"]')) {
+      const href = typeof anchor.getAttribute === "function" ? anchor.getAttribute("href") : "";
+      const handle = handleFrom(href ?? "");
+      if (handle) return handle;
+    }
+    return "";
+  }
+
+  /** 从一块作者区里取名字：显示名 → 整段文本里的昵称 → @句柄（都拿不到返回空串） */
+  function readAuthorBox(box) {
+    if (!box) return "";
+    const display = firstTextOf(box, 'a:not([tabindex="-1"])');
+    if (display && !display.startsWith("@")) return display;
+
+    const fromText = nameFromText(box.textContent ?? "");
+    if (fromText) return fromText;
+
+    return handleFrom(firstTextOf(box, 'a[tabindex="-1"]')) || handleFrom(box.textContent ?? "");
+  }
+
+  /**
+   * 点开大图（灯箱）时图片不在推文节点里，closest 一定拿不到。
+   * 退法：沿祖先往上找「刚好只含一个作者区」的那层——灯箱根节点就是图片和推文信息区共同的那层；
+   * 出现两块以上作者区说明已经爬到一串推文里了，立即停手，绝不错认别人的昵称。
+   */
+  function authorFromAncestors(image) {
+    let node = image.parentElement;
+    for (let depth = 0; node && depth < 10; depth += 1) {
+      if (node === document.body || node === document.documentElement) break;
+      if (typeof node.querySelectorAll === "function") {
+        const boxes = node.querySelectorAll(X_AUTHOR_SELECTOR);
+        if (boxes.length > 1) break;
+        if (boxes.length === 1) {
+          const got = readAuthorBox(boxes[0]);
+          if (got) return got;
+        }
+      }
+      node = node.parentElement;
+    }
+    return "";
+  }
+
+  /** 页面地址里的账号：/asteroid_ill/status/1990.../photo/1 → asteroid_ill（不是状态页就不认） */
+  function handleFromPageUrl() {
+    try {
+      const match = /^\/([A-Za-z0-9_]{1,15})\/status\/\d+/.exec(location.pathname ?? "");
+      return match ? match[1] : "";
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * X.com 取昵称，逐级退让、任何一级拿到就停：
+   *   1) 被拖的 <img> 所在推文（引用推取最近那层）→ 作者区（显示名 → 昵称文本 → @句柄）；
+   *   2) 图不在推文里（灯箱/大图查看）→ 沿祖先找只含一个作者区的那层；
+   *   3) 还是不行 → 推文里 /账号/status/ 链接；
+   *   4) 最后一招 → 页面地址里的账号（/<账号>/status/…/photo/1）。
+   */
+  function readXAuthor(image) {
+    const tweet = image.closest(X_QUOTED_SELECTOR) ?? image.closest(X_TWEET_SELECTOR);
+    if (tweet) {
+      const fromBox = readAuthorBox(tweet.querySelector(X_AUTHOR_SELECTOR));
+      if (fromBox) return fromBox;
+      const fromLink = handleFromStatusLink(tweet);
+      if (fromLink) return fromLink;
+    }
+    return authorFromAncestors(image) || handleFromPageUrl();
+  }
+
+  /** 站点适配表：只对认识的站点就近查询一次 DOM，不认识的站点不猜（宁可不加前缀） */
+  const AUTHOR_ADAPTERS = [{ host: /(?:^|\.)(?:x|twitter)\.com$/i, read: readXAuthor }];
+
+  /** 同步 DOM 查询，无网络、无异步：拿不到就返回空串，绝不拖慢拖拽 */
+  function authorOf(image) {
+    try {
+      for (const adapter of AUTHOR_ADAPTERS) {
+        if (!adapter.host.test(location.hostname)) continue;
+        return cleanAuthor(adapter.read(image) ?? "");
+      }
+    } catch {
+      // 页面结构变了 / 拿到非元素节点：安静放弃前缀，不干扰采集
+    }
+    return "";
+  }
 
   let session = null;
   let overlay = null;
@@ -78,7 +245,7 @@
     overlay = globalThis.YSTKOverlay.create({
       loadChildren: requestChildren,
       onDrop: (relPath) => {
-        void saveTo(relPath);
+        submitDrop(relPath);
       },
       onDismiss: () => endSession(),
     });
@@ -106,6 +273,169 @@
     );
     if (response?.ok && response.data) return response.data;
     throw response?.error ?? { code: "INTERNAL", message: "读取子目录失败" };
+  }
+
+  /* ---------------- 原图候选 ---------------- */
+
+  function pathOf(url) {
+    const hashAt = url.indexOf("#");
+    const text = hashAt >= 0 ? url.slice(0, hashAt) : url;
+    const queryAt = text.indexOf("?");
+    return queryAt >= 0 ? text.slice(0, queryAt) : text;
+  }
+
+  /** 相对地址 → 绝对 http(s)；data:image 原样返回；其它协议一律不要 */
+  function absoluteUrl(raw) {
+    if (typeof raw !== "string") return "";
+    const text = raw.trim();
+    if (!text) return "";
+    if (/^data:image\//i.test(text)) return text;
+    try {
+      const url = new URL(text, location.href);
+      return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
+    } catch {
+      return "";
+    }
+  }
+
+  /** 去掉末段 `@尺寸处理` 后缀；没有后缀返回空串（调用方据此区分"有没有"） */
+  function stripVariant(src) {
+    if (typeof src !== "string" || !src) return "";
+    if (/^data:/i.test(src)) return "";
+    const hashAt = src.indexOf("#");
+    const noHash = hashAt >= 0 ? src.slice(0, hashAt) : src;
+    const queryAt = noHash.indexOf("?");
+    const query = queryAt >= 0 ? noHash.slice(queryAt) : "";
+    const pathPart = queryAt >= 0 ? noHash.slice(0, queryAt) : noHash;
+    const slash = pathPart.lastIndexOf("/");
+    const head = pathPart.slice(0, slash + 1);
+    const tail = pathPart.slice(slash + 1);
+    const at = tail.indexOf("@");
+    if (at <= 0) return "";
+    // 尺寸类查询参数只对"变体接口"有意义，去后缀时连它一起丢；其它查询串照旧保留
+    const keepQuery = query !== "" && !SIZE_QUERY_RE.test(query) ? query : "";
+    return `${head}${tail.slice(0, at)}${keepQuery}`;
+  }
+
+  /**
+   * X/Twitter 图片 CDN 的尺寸档：?name=small|medium|large|120x120|4096x4096 都是压缩版，
+   * name=orig 才是上传的原图（时间线里那张确实被压过）。
+   * format 参数保持原样优先；传 "jpg" 时另给一条 format=jpg&name=orig 作兜底。
+   */
+  function twimgOriginal(src, format) {
+    if (typeof src !== "string" || !src) return "";
+    let url;
+    try {
+      url = new URL(src);
+    } catch {
+      return "";
+    }
+    if (url.hostname !== "pbs.twimg.com") return "";
+    const name = url.searchParams.get("name");
+    if (!name || name === "orig") return "";
+    url.searchParams.set("name", "orig");
+    if (format) url.searchParams.set("format", format);
+    return url.href;
+  }
+
+  /** srcset 里权重最大的一项：`{ url, weight }`（无描述按 1x 计，w 描述按像素宽） */
+  function bestSrcsetEntry(srcset) {
+    if (typeof srcset !== "string" || !srcset.trim()) return null;
+    let best = null;
+    for (const part of srcset.split(",")) {
+      const pieces = part.trim().split(/\s+/);
+      const url = pieces[0] ?? "";
+      if (!url) continue;
+      let weight = 1;
+      for (const descriptor of pieces.slice(1)) {
+        const match = /^([0-9.]+)([wx])$/i.exec(descriptor);
+        if (!match) continue;
+        const value = Number(match[1]);
+        if (!Number.isFinite(value)) continue;
+        weight = Math.max(weight, match[2].toLowerCase() === "x" ? value * 1000 : value);
+      }
+      if (!best || weight > best.weight) best = { url, weight };
+    }
+    return best;
+  }
+
+  /** `<img srcset>` 的最大项 */
+  function srcsetLargest(image) {
+    const entry = bestSrcsetEntry(image.srcset ?? "");
+    return entry ? absoluteUrl(entry.url) : "";
+  }
+
+  /** `<picture>` 里各 `<source srcset>` 的最大项（跨 source 比权重） */
+  function pictureLargest(image) {
+    if (typeof image.closest !== "function") return "";
+    const picture = image.closest("picture");
+    if (!picture || typeof picture.querySelectorAll !== "function") return "";
+    let best = null;
+    for (const source of picture.querySelectorAll("source[srcset]")) {
+      const entry = bestSrcsetEntry(source.getAttribute("srcset") ?? "");
+      if (!entry) continue;
+      if (!best || entry.weight > best.weight) best = entry;
+    }
+    return best ? absoluteUrl(best.url) : "";
+  }
+
+  /** 外层链接指向图片文件（灯箱/原图链接）时才算线索，避免把详情页当图片抓 */
+  function anchorImageUrl(image) {
+    if (typeof image.closest !== "function") return "";
+    const link = image.closest("a[href]");
+    if (!link) return "";
+    const href = absoluteUrl(link.getAttribute("href") ?? "");
+    if (!href || /^data:/i.test(href)) return "";
+    return IMAGE_PATH_RE.test(pathOf(stripVariant(href) || href)) ? href : "";
+  }
+
+  /** 自定义属性里挂的原图地址（按图片扩展名过滤，避免抓到页面/统计地址） */
+  function dataSrcUrl(image) {
+    if (typeof image.getAttribute !== "function") return "";
+    for (const attr of DATA_SRC_ATTRS) {
+      const url = absoluteUrl(image.getAttribute(attr) ?? "");
+      if (!url || /^data:/i.test(url)) continue;
+      if (IMAGE_PATH_RE.test(pathOf(stripVariant(url) || url))) return url;
+    }
+    return "";
+  }
+
+  /**
+   * 原图候选（按"更可能是原图"排序、去重，最多 MAX_CANDIDATES 条）：
+   * 1) 渲染地址去掉 `@尺寸后缀`（B 站这类站点的唯一原图线索）；
+   * 2) 外层链接指向的图片文件；
+   * 3) `<img srcset>` / `<picture><source>` 的最大项；
+   * 4) `data-original` 一类属性；
+   * 5) 兜底：当前渲染地址（宁可存缩略图，也不能不存）。
+   * 真正的取舍在后台：逐个取回后按解码像素面积挑最大的那张。
+   */
+  function deriveCandidates(image) {
+    const rendered = absoluteUrl(image.currentSrc || image.src || "");
+    const preferred = [
+      // X/Twitter：?name=small 只是尺寸档，name=orig 才是原图
+      twimgOriginal(rendered),
+      twimgOriginal(rendered, "jpg"),
+      // B 站这类 CDN：去掉末段 @尺寸后缀
+      stripVariant(rendered),
+      anchorImageUrl(image),
+      srcsetLargest(image),
+      pictureLargest(image),
+      dataSrcUrl(image),
+    ];
+    const out = [];
+    const push = (raw) => {
+      const url = absoluteUrl(raw);
+      if (!url || out.includes(url)) return;
+      out.push(url);
+    };
+    // 渲染地址永远留最后一格兜底：宁可存缩略图，也不能一条都取不回来
+    const limit = rendered ? MAX_CANDIDATES - 1 : MAX_CANDIDATES;
+    for (const raw of preferred) {
+      if (out.length >= limit) break;
+      push(raw);
+    }
+    push(rendered);
+    return out;
   }
 
   /* ---------------- 会话 ---------------- */
@@ -143,16 +473,21 @@
   }
 
   function startSession(image, event) {
-    const src = (image.currentSrc || image.src || "").trim();
+    // 候选按"更可能是原图"排好序：后台会逐个取回、按解码像素面积挑最大的一张
+    const candidates = deriveCandidates(image);
+    const src = candidates[0] ?? "";
     if (!src) return;
     if (session) endSession();
 
     const supported = isSupportedSource(src);
     session = {
       src,
+      candidates,
       origin: dragOrigin(event, image),
       sourceKind: supported.kind ?? "http",
       alt: image.alt || "",
+      // 作者昵称只做文件名前缀：站点没适配/结构对不上就是空串，不影响采集
+      author: authorOf(image),
       pageUrl: location.href,
       pageTitle: document.title,
       target: null,
@@ -170,6 +505,7 @@
     if (!supported.ok) {
       panel.open({
         anchor: current.origin,
+        author: current.author,
         displayPath: "参考图库",
         baseRelPath: "",
         theme: "light",
@@ -185,6 +521,7 @@
     if (!hello?.ok) {
       panel.open({
         anchor: current.origin,
+        author: current.author,
         displayPath: "参考图库",
         baseRelPath: "",
         theme: "light",
@@ -198,6 +535,7 @@
     if (data.enabled === false) {
       panel.open({
         anchor: current.origin,
+        author: current.author,
         displayPath: "参考图库",
         baseRelPath: "",
         theme: "light",
@@ -209,6 +547,7 @@
     if (!data.connected || !data.target) {
       panel.open({
         anchor: current.origin,
+        author: current.author,
         displayPath: "参考图库",
         baseRelPath: "",
         theme: "light",
@@ -217,20 +556,12 @@
       panel.setLocked(connectHint(data.blocked));
       return;
     }
-    if (data.busy) {
-      panel.open({
-        anchor: current.origin,
-        displayPath: "参考图库",
-        baseRelPath: "",
-        theme: "light",
-        mode: "notice",
-      });
-      panel.setLocked("上一张还在保存，请等它完成后再拖这一张（不会静默丢图）。");
-      return;
-    }
+    // 上一张还在保存不再挡人：后台按队列串行取图/写盘（队列满才回 BUSY），
+    // 松手即关窗，用户连续拖几张也不会丢图。
     if (data.blocked) {
       panel.open({
         anchor: current.origin,
+        author: current.author,
         displayPath: data.target.displayPath ?? "参考图库",
         baseRelPath: data.target.baseRelPath ?? "",
         theme: data.target.theme,
@@ -245,6 +576,7 @@
     current.ready = true;
     panel.open({
       anchor: current.origin,
+      author: current.author,
       displayPath: data.target.displayPath ?? "参考图库",
       baseRelPath: data.target.baseRelPath ?? "",
       theme: data.target.theme,
@@ -305,49 +637,48 @@
     if (overlay && overlay.isOpen()) overlay.close();
   }
 
-  async function saveTo(relPath) {
+  /**
+   * 松手：**只提交一次，然后立刻关窗**（2026-11-18 用户口径：松手即消失）。
+   * 取图与写盘交给后台队列，结果看扩展弹窗里的「上一次采集」。
+   *
+   * `dropped` 是"这次拖拽已经用掉"的闸：浮层关掉、session 置空后，
+   * 残留的 drop / 重复的 drop 都不可能再存第二张——一次拖拽只落一个文件。
+   */
+  function submitDrop(relPath) {
     const current = session;
-    if (!current || current.saving || !current.ready) return;
-    current.saving = true;
+    if (!current || current.dropped || current.saving || !current.ready) return;
     current.dropped = true;
-    const panel = ensureOverlay();
-    panel.setStatus("saving", "保存中…");
-    panel.setLocked("保存中，请稍候…");
-
-    const response = await sendExtension(
-      {
-        type: "collector/save",
-        payload: {
-          relPath,
-          src: current.src,
-          sourceKind: current.sourceKind,
-          pageUrl: current.pageUrl,
-          pageTitle: current.pageTitle,
-          alt: current.alt,
-          target: {
-            instanceId: current.target.instanceId,
-            contextVersion: current.target.contextVersion,
-          },
-        },
+    current.saving = true;
+    const payload = {
+      relPath,
+      src: current.src,
+      candidates: current.candidates,
+      sourceKind: current.sourceKind,
+      pageUrl: current.pageUrl,
+      pageTitle: current.pageTitle,
+      alt: current.alt,
+      author: current.author,
+      target: {
+        instanceId: current.target.instanceId,
+        contextVersion: current.target.contextVersion,
       },
-      SAVE_TIMEOUT_MS,
-    );
+    };
+    // 先关窗（同步），再发消息：网络/写盘都在后台继续，不等用户按 Esc
+    endSession();
+    void sendSave(payload);
+  }
 
-    current.saving = false;
-    if (session !== current) return;
-
-    if (response?.ok && response.data) {
-      panel.setLocked(null);
-      panel.setStatus(
-        "ok",
-        `已保存到 ${response.data.relPath}；回到工具箱点「重新扫描」后显示。`,
+  async function sendSave(payload) {
+    const response = await sendExtension({ type: "collector/save", payload }, SAVE_TIMEOUT_MS);
+    if (response?.ok) {
+      const saved = response.data ?? {};
+      console.info(
+        `[ystk-collector] 已保存 ${saved.relPath ?? ""}（${saved.bytes ?? 0} 字节）`,
       );
       return;
     }
-
     const error = response?.error ?? {};
-    panel.setLocked(null);
-    panel.setStatus("error", `保存失败：${describeSaveError(error)}`);
+    console.warn(`[ystk-collector] 保存失败：${describeSaveError(error)}`, error);
   }
 
   function describeSaveError(error) {
@@ -359,7 +690,9 @@
       case "CROSS_SEARCH":
         return "工具箱正开着跨库搜索，无法确定保存目录；先关掉跨库搜索再拖。";
       case "BUSY":
-        return "工具箱正忙（上一张还在保存），这次没有写文件。";
+        return "后台保存队列已满（最多 6 张），这次没有写文件；稍等几秒再拖。";
+      case "DUPLICATE":
+        return "这张图这次拖拽已经在保存，重复提交已忽略（不会写第二份）。";
       case "DIR_MISSING":
         return "目标子目录已不存在（不会自动重建，也不会退回根目录）。";
       case "TOO_LARGE":
@@ -422,4 +755,16 @@
     stopRevalidate();
     ensureOverlay().invalidate();
   });
+
+  // 原图候选推导是纯函数；导出给构建期/自测脚本直接核对 URL 规则（同 overlay 导出 COMPONENT_CSS 的口径）
+  globalThis.YSTKCollectorSrc = { deriveCandidates, stripVariant, bestSrcsetEntry, twimgOriginal };
+  // 作者昵称适配（X.com）同样是纯函数 + 一次同步 DOM 查询，导出给自测脚本喂假 DOM 核对
+  globalThis.YSTKCollectorAuthor = {
+    authorOf,
+    readXAuthor,
+    cleanAuthor,
+    nameFromText,
+    handleFrom,
+    handleFromPageUrl,
+  };
 })();
