@@ -77,6 +77,8 @@ export type CollectorErrorCode =
   | "OUT_OF_SCOPE"
   | "DIR_MISSING"
   | "BUSY"
+  /** 同一次拖拽的重复提交（扩展侧按 目录+源地址 去重），不写第二份 */
+  | "DUPLICATE"
   | "UNKNOWN_SAVE"
   | "CHUNK_OUT_OF_ORDER"
   | "TOO_LARGE"
