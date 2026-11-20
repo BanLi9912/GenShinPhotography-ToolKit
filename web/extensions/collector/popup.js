@@ -103,30 +103,32 @@
 
   function renderLastTask(data) {
     const task = data.lastTask;
+    // 松手即关浮层后，后台队列是唯一的进度出口：有排队就顺带说一句
+    const queueSuffix = data.queued > 0 ? `（后台队列 ${data.queued} 张）` : "";
     if (!task || !task.status) {
-      textOf(els.lastTask, "还没有采集记录。");
+      textOf(els.lastTask, `还没有采集记录。${queueSuffix}`);
       els.lastTask.className = "hint";
       return;
     }
     const when = task.at ? new Date(task.at).toLocaleTimeString() : "";
     if (task.status === "saving") {
-      textOf(els.lastTask, `保存中…（${when}）`);
+      textOf(els.lastTask, `保存中…（${when}）${queueSuffix}`);
       els.lastTask.className = "hint";
       return;
     }
     if (task.status === "saved") {
-      textOf(els.lastTask, `已保存：${task.relPath ?? task.fileName ?? ""}（${when}）`);
+      textOf(els.lastTask, `已保存：${task.relPath ?? task.fileName ?? ""}（${when}）${queueSuffix}`);
       els.lastTask.className = "hint ok";
       return;
     }
     if (task.status === "unconfirmed") {
-      textOf(els.lastTask, `结果未确认：请检查目标目录（${when}）`);
+      textOf(els.lastTask, `结果未确认：请检查目标目录（${when}）${queueSuffix}`);
       els.lastTask.className = "hint err";
       return;
     }
     textOf(
       els.lastTask,
-      `失败：${task.error?.message ?? "未知原因"}${when ? `（${when}）` : ""}`,
+      `失败：${task.error?.message ?? "未知原因"}${when ? `（${when}）` : ""}${queueSuffix}`,
     );
     els.lastTask.className = "hint err";
   }

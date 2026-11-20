@@ -39,7 +39,8 @@ export interface LibrarySummary {
 /** 内存注册表（句柄只在内存 + idb，不进 zustand，避免无谓重渲染） */
 const registry = new Map<string, LibraryRegistryEntry>();
 
-function randomLibraryId(): string {
+/** 新图库 id（`lib_` + 8 位十六进制）；拆分生成的子库沿用同一格式 */
+export function randomLibraryId(): string {
   const bytes = new Uint8Array(4);
   crypto.getRandomValues(bytes);
   return `lib_${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
@@ -125,6 +126,22 @@ export async function bindNewLibrary(): Promise<LibraryRegistryEntry | null> {
   const meta = await readJsonFile<LibraryMeta>(handle, ".ystk/meta.json");
   const existingId =
     meta && typeof meta.libraryId === "string" ? meta.libraryId : null;
+
+  if (!existingId) {
+    // 拆分半成品（2026-11-18 任务卡 §4 B6）：.ystk 里只有未完成标记、还没有 meta.json。
+    // 此时绝不能走下面「无 meta → 生成新 id + 写空索引」——那会把已经写好的 index.json
+    // 当成不存在，直接覆盖成 []。识别出来就停手，让用户回原图库继续拆分。
+    const marker = await readJsonFile<{ targetPath?: string; count?: number }>(
+      handle,
+      ".ystk/.split-in-progress.json",
+    );
+    if (marker) {
+      throw new Error(
+        `这个目录里有一次未完成的图库拆分（${marker.count ?? 0} 张，目录「${marker.targetPath ?? "?"}」）。` +
+          "请回到原图库再点一次「拆分为独立图库…」把它写完，不要在这里绑定（否则会生成空索引覆盖它）。",
+      );
+    }
+  }
 
   if (existingId) {
     const existing = registry.get(existingId);

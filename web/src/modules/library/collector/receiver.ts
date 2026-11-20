@@ -394,6 +394,14 @@ interface TerminalEntry {
 /** saveId / requestId → 终态（幂等回执用；内存不持久化，刷新即失） */
 const terminal = new Map<string, TerminalEntry>();
 
+/**
+ * saveId → 正在跑的写盘任务。COMMIT 的终态要等文件写完才登记，
+ * 而扩展侧的桥每 500ms 会重发同一封信封（toolkit-bridge.js），重复 COMMIT
+ * 若在写入期间到达会撞上"会话已清空 + 终态还没写"的空窗，被误判成
+ * UNKNOWN_SAVE（用户随后看到"结果未确认"去重拖）。这里直接复用同一个 Promise。
+ */
+const pendingCommits = new Map<string, Promise<{ ok: true; data: SaveResult } | { ok: false; error: CollectorError }>>();
+
 function pruneTerminal(): void {
   const now = Date.now();
   for (const [key, entry] of terminal) {
@@ -560,9 +568,17 @@ export function sniffImageType(head: Uint8Array): { ext: string; mime: string } 
     return { ext: "bmp", mime: "image/bmp" };
   }
   if (ascii(4, 8) === "ftyp") {
-    const brand = ascii(8, 12);
-    if (brand === "avif" || brand === "avis") {
+    const major = ascii(8, 12);
+    if (major === "avif" || major === "avis") {
       return { ext: "avif", mime: "image/avif" };
+    }
+    // 真实 AVIF 很常见是 ftyp mif1/msf1 + 兼容 brand 里带 avif：只认主 brand 会误杀
+    const boxSize = Math.min(((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0, b.length);
+    for (let offset = 16; offset + 4 <= boxSize; offset += 4) {
+      const compatible = ascii(offset, offset + 4);
+      if (compatible === "avif" || compatible === "avis") {
+        return { ext: "avif", mime: "image/avif" };
+      }
     }
   }
   return null;
@@ -619,6 +635,8 @@ async function commitSave(
       ? { ok: true, data: done.result }
       : { ok: false, error: done.error ?? { code: "WRITE_FAILED", message: "保存失败" } };
   }
+  const inflight = pendingCommits.get(payload.saveId);
+  if (inflight) return inflight;
   if (!session || session.saveId !== payload.saveId) {
     return { ok: false, error: { code: "UNKNOWN_SAVE", message: "保存会话不存在或已过期" } };
   }
@@ -703,6 +721,11 @@ async function commitSave(
   });
   // 链上吞掉异常，避免一次失败卡死后续写入
   writeChain = task.catch(() => undefined);
+  pendingCommits.set(payload.saveId, task);
+  void task.then(
+    () => pendingCommits.delete(payload.saveId),
+    () => pendingCommits.delete(payload.saveId),
+  );
   activeSave = null;
   return task;
 }

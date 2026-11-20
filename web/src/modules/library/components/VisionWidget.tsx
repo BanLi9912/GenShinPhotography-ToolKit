@@ -22,6 +22,9 @@
  * 进度读数（含速度/预计剩余/失败数）与分析的暂停/继续一并迁到本小窗：收起态 header 一行
  * 短读数 + 贴底 2px 进度条（认当前活动：识图队列运行中 → 图库任务 → 识图静态值），展开态
  * body 顶部给全文读数与暂停/继续。工具栏读数会随数字跳动改导航栏宽度，小窗定宽不受影响。
+ * 2026-11-19（用户口径）：图库任务进度优先级提到**最高**——扫描/分析在跑时 header 文本、
+ * 状态点、贴底进度条一律只认任务（压过批量确认/待识图确认/识图中/blocked/完成态）；否则
+ * 「待识图确认」态下点「重新扫描」，整个扫描期都看不见读数。
  * errors 只活在本轮内存（刷新即失，不落盘——禁区见任务卡 §5）。
  */
 
@@ -234,30 +237,34 @@ export function VisionWidget() {
 
   if (!visible) return null;
 
-  /** 贴底 2px 进度条读数：识图队列运行中 → 当前图库任务（扫描/分析）→ 识图队列静态值 */
-  const pct = running
-    ? total > 0
-      ? Math.min(100, Math.round((done / total) * 100))
-      : 0
-    : jobKind !== null
+  /** 贴底 2px 进度条读数：当前图库任务（扫描/分析）→ 识图队列运行中 → 识图队列静态值。
+   *  2026-11-19 顺序与 header 文本一致：任务在跑就只画任务进度，不出现「文本说任务、
+   *  条子却画识图」的错配 */
+  const pct =
+    jobKind !== null
       ? jobPct
-      : total > 0
-        ? Math.min(100, Math.round((done / total) * 100))
-        : 0;
+      : running
+        ? total > 0
+          ? Math.min(100, Math.round((done / total) * 100))
+          : 0
+        : total > 0
+          ? Math.min(100, Math.round((done / total) * 100))
+          : 0;
 
   // header 文本（M3.5.3.2 §4.4 逐字表：一行整合状态+计数+金额；金额 toFixed(2)）
   const amount = cost.amount.toFixed(2);
   let pillText: ReactNode;
-  if (visionBatchRequest !== null) {
+  if (jobKind !== null) {
+    // 2026-11-19 用户口径：图库任务进度优先级**最高**，高于一切提示/确认态。此前它排在
+    // 批量确认、待识图确认、识图中之后，于是「新图库待识图确认」态下点「重新扫描」，整个
+    // 扫描期 header 都停在「待识图确认」、读数根本看不见
+    pillText = jobPill;
+  } else if (visionBatchRequest !== null) {
     pillText = `批量识图待确认 · ${visionBatchRequest.ids.length} 张`;
   } else if (visionPending) {
     pillText = "待识图确认";
   } else if (running) {
     pillText = `识图中 ${done}/${total} · ¥${amount}`;
-  } else if (jobKind !== null) {
-    // 图库任务（扫描/分析）进行中优先于 blocked 与陈旧完成态：重扫/重分析时不该还显示
-    // 上一轮「已识图 N/M」或上一轮残留的「识图未启动」
-    pillText = jobPill;
   } else if (blockedReason) {
     pillText = "识图未启动";
   } else if (done + failed < total) {
@@ -276,14 +283,18 @@ export function VisionWidget() {
     pillText = `已识图 ${visionCount}/${items.length} · ¥${amount}`;
   }
 
-  // 状态点：批量确认/新库 pending 无类（accent）/ running 或图库任务脉动 / 失败或 blocked 红 / 其余绿
-  const dotCls = visionBatchRequest !== null || visionPending
-    ? ""
-    : running || jobKind !== null
+  // 状态点：图库任务在跑 → 脉动（同 header 文本的最高优先）；批量确认/新库 pending 无类
+  // （accent）/ 识图运行中脉动 / 失败或 blocked 红 / 其余绿
+  const dotCls =
+    jobKind !== null
       ? " is-running"
-      : failed > 0 || blockedReason
-        ? " is-error"
-        : " is-ok";
+      : visionBatchRequest !== null || visionPending
+        ? ""
+        : running
+          ? " is-running"
+          : failed > 0 || blockedReason
+            ? " is-error"
+            : " is-ok";
 
   /**
    * M3.5.3.6 确认清单行数据：id → 文件名（title = 完整 relPath）+ 状态点类。

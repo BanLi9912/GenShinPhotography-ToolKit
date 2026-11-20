@@ -144,7 +144,26 @@ function pruneAnswered(): void {
   }
 }
 
+/**
+ * 在途请求（requestId → Promise）：扩展侧的桥每 500ms 重发同一封信封，
+ * 只记"已完成的答复"挡不住在途重放——BEGIN_SAVE 会被跑两遍（第二个会话覆盖
+ * 第一个，后续分块全被判 UNKNOWN_SAVE）。这里让重复请求直接等同一份结果。
+ */
+const inflight = new Map<string, Promise<CollectorResponse>>();
+
 async function handleRequest(request: CollectorRequest): Promise<CollectorResponse> {
+  const requestId = typeof request.requestId === "string" ? request.requestId : "";
+  if (!requestId) return runRequest(request); // 缺 requestId 无从去重：交给原逻辑回 BAD_REQUEST
+  const running = inflight.get(requestId);
+  if (running) return running;
+  const run = runRequest(request);
+  inflight.set(requestId, run);
+  const settle = () => inflight.delete(requestId);
+  void run.then(settle, settle);
+  return run;
+}
+
+async function runRequest(request: CollectorRequest): Promise<CollectorResponse> {
   // 版本/命名空间不符：不执行任何副作用，只回一个明确的错误
   if (request.ns !== PROTOCOL_NS || request.v !== PROTOCOL_VERSION) {
     return envelopeError(
