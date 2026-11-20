@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryIndexItem } from "../index/indexFile";
+import { splitActionState } from "../index/splitFolder";
 import { useLibraryStore } from "../store";
 
 /** 贴边触发条的宽度（px）：左侧这么窄的一条竖带才算「贴边」。
@@ -131,6 +132,9 @@ export function FolderDrawer() {
   const items = useLibraryStore((s) => s.items);
   const folderScope = useLibraryStore((s) => s.folderScope);
   const setFolderScope = useLibraryStore((s) => s.setFolderScope);
+  const scanRunning = useLibraryStore((s) => s.scan.running);
+  const splittingTarget = useLibraryStore((s) => s.splittingTarget);
+  const splitFolderToLibrary = useLibraryStore((s) => s.splitFolderToLibrary);
   /** 别的浮层开着时不自动弹出（免得两层玻璃叠一起，或盖住设置 / 详情 / 批量确认） */
   const blocked = useLibraryStore(
     (s) =>
@@ -158,12 +162,26 @@ export function FolderDrawer() {
   const armingRef = useRef(false);
   /** 本次展开是否由用户主动点开（键盘/点击）：是则把焦点移进浮层，纯悬停弹出不动焦点 */
   const openedByUserRef = useRef(false);
+  /**
+   * 最近一次交互是否来自鼠标（true）。收起时只给**键盘用户**把焦点还回抓手——
+   * 鼠标用户点完就还焦点的话，抓手会亮起焦点环（2026-11-19 用户反馈「点一下左侧文件数
+   * 按钮冒出个选中框」）；CSS 侧已把环改成 4px 胶囊的细描边，这里再掐掉「根本不该有」。
+   */
+  const pointerInputRef = useRef(false);
   /** 静默期截止时间（performance.now 口径） */
   const readyAtRef = useRef(0);
   /** 是否已经展开过一次：首次挂载不进静默期（页面刚打开就该能贴边弹出） */
   const everOpenedRef = useRef(false);
 
   const tree = useMemo(() => buildFolderTree(items), [items]);
+
+  /** 底部「拆分为独立图库…」的可见/禁用口径（纯函数在 splitFolder.ts，可单测） */
+  const splitAction = splitActionState({
+    folderScope,
+    treeEmpty: tree.length === 0,
+    scanRunning,
+    splitting: splittingTarget != null,
+  });
 
   /** 计时态只在真变化时写 state：指针在页面里频繁移动，不要每帧重渲染
    *  （进度动画的 key 只在真正重新计时的那些事件上递增） */
@@ -219,7 +237,8 @@ export function FolderDrawer() {
     cancelDwell();
     cancelLeave();
     const panel = panelRef.current;
-    if (panel && panel.contains(document.activeElement)) {
+    // 只在键盘交互后把焦点还给抓手（焦点不能落到 body）；鼠标收起就让它自然消失
+    if (panel && panel.contains(document.activeElement) && !pointerInputRef.current) {
       gripRef.current?.focus({ preventScroll: true });
     }
     setOpen(false);
@@ -307,6 +326,7 @@ export function FolderDrawer() {
     };
 
     const onDown = (e: PointerEvent) => {
+      pointerInputRef.current = true;
       cancelDwell(); // 按下即重新计时（连带清掉静止基准点）
       if (!open) return;
       const target = e.target as Node | null;
@@ -321,6 +341,7 @@ export function FolderDrawer() {
     };
 
     const onKey = (e: KeyboardEvent) => {
+      pointerInputRef.current = false;
       if (e.key === "Escape" && open) {
         e.stopPropagation();
         close();
@@ -416,6 +437,17 @@ export function FolderDrawer() {
   const pickScope = (path: string | null) =>
     setFolderScope(path !== null && folderScope === path ? null : path);
 
+  /**
+   * 拆分入口：先收起浮层再弹公共确认框（确认期间浮层不该开着，移开鼠标也不该把它关掉），
+   * 快照/计数/复核/写入全部由 store.splitFolderToLibrary 负责——本层只传目标目录。
+   */
+  const onSplit = () => {
+    if (folderScope == null || splitAction.disabled) return;
+    const target = folderScope;
+    close();
+    void splitFolderToLibrary(target);
+  };
+
   return (
     <>
       {/* 贴边抓手：左缘细条上的可见提示（悬停变亮、计时进度向上填充），
@@ -509,15 +541,35 @@ export function FolderDrawer() {
           </div>
           <footer className="lib-folderdrawer__foot">
             {folderScope != null ? (
-              <button
-                type="button"
-                className="lib-folderdrawer__clear"
-                onClick={() => setFolderScope(null)}
-              >
-                清除文件夹筛选
-              </button>
+              <div className="lib-folderdrawer__actions">
+                <button
+                  type="button"
+                  className="lib-folderdrawer__clear"
+                  onClick={() => setFolderScope(null)}
+                >
+                  清除文件夹筛选
+                </button>
+                {splitAction.visible && (
+                  <button
+                    type="button"
+                    className="lib-folderdrawer__split"
+                    disabled={splitAction.disabled}
+                    title={
+                      splitAction.disabled
+                        ? splitAction.hint
+                        : `把「${folderScope}」及其子目录生成独立图库索引（不动原图）`
+                    }
+                    onClick={onSplit}
+                  >
+                    拆分为独立图库…
+                  </button>
+                )}
+              </div>
             ) : (
               <span className="lib-folderdrawer__hint">移开鼠标即收起</span>
+            )}
+            {folderScope != null && splitAction.hint !== "" && (
+              <p className="lib-folderdrawer__hint">{splitAction.hint}</p>
             )}
           </footer>
         </div>
