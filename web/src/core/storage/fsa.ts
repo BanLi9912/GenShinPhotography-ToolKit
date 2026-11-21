@@ -13,16 +13,36 @@ declare global {
   interface Window {
     showDirectoryPicker(options?: {
       mode?: "read" | "readwrite";
+      /** 同一 id 的选择器记住各自上次的位置（Chromium） */
+      id?: string;
     }): Promise<FileSystemDirectoryHandle>;
+    showSaveFilePicker?(options?: {
+      suggestedName?: string;
+      id?: string;
+      types?: Array<{ description?: string; accept: Record<string, string[]> }>;
+      excludeAcceptAllOption?: boolean;
+    }): Promise<FileSystemFileHandle>;
   }
   interface FileSystemHandle {
     queryPermission?(desc: { mode?: "read" | "readwrite" }): Promise<PermissionState>;
     requestPermission?(desc: { mode?: "read" | "readwrite" }): Promise<PermissionState>;
-    /** Chrome 104+；缺失时走 writeFileAtomic 的降级覆盖写分支 */
-    move?(name: string): Promise<void>;
+    /**
+     * Chrome 104+；缺失时走 writeFileAtomic 的降级覆盖写分支。
+     * 也可传目标目录（+ 新名字）跨目录移动文件；本地文件系统上只支持移动文件，不支持移动目录。
+     */
+    move?(target: string | FileSystemDirectoryHandle, name?: string): Promise<void>;
+    /** Chrome 110+：删除句柄指向的条目（分享包导出失败时清掉空文件） */
+    remove?(options?: { recursive?: boolean }): Promise<void>;
   }
   interface FileSystemDirectoryHandle {
     values(): AsyncIterableIterator<FileSystemDirectoryHandle | FileSystemFileHandle>;
+  }
+  interface FileSystemCreateWritableOptions {
+    /**
+     * Chrome 121+：exclusive = 独占写入，持有期间同一文件上的其它写入流都打不开；
+     * 默认 siloed（各写各的交换文件）。旧版浏览器会忽略这个参数。
+     */
+    mode?: "exclusive" | "siloed";
   }
 }
 
@@ -31,10 +51,38 @@ export function isFsaSupported(): boolean {
   return typeof window.showDirectoryPicker === "function";
 }
 
-/** 打开系统目录选择器（必须由用户手势触发）；用户取消返回 null，其余异常上抛 */
-export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null> {
+/**
+ * 打开系统目录选择器（必须由用户手势触发）；用户取消返回 null，其余异常上抛。
+ * id：同一用途的选择器传同一 id，浏览器会记住它上次打开的位置。
+ */
+export async function pickDirectory(
+  id?: string,
+): Promise<FileSystemDirectoryHandle | null> {
   try {
-    return await window.showDirectoryPicker({ mode: "readwrite" });
+    return await window.showDirectoryPicker(id ? { mode: "readwrite", id } : { mode: "readwrite" });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") return null;
+    throw err;
+  }
+}
+
+/** 另存为选择器（必须由用户手势触发）；不支持时抛错，用户取消返回 null */
+export async function pickSaveFile(options: {
+  suggestedName: string;
+  id: string;
+  description: string;
+  mime: string;
+  extension: string;
+}): Promise<FileSystemFileHandle | null> {
+  if (typeof window.showSaveFilePicker !== "function") {
+    throw new Error("当前浏览器不支持另存为对话框，请使用 Chrome 或 Edge");
+  }
+  try {
+    return await window.showSaveFilePicker({
+      suggestedName: options.suggestedName,
+      id: options.id,
+      types: [{ description: options.description, accept: { [options.mime]: [options.extension] } }],
+    });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") return null;
     throw err;

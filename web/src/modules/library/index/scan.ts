@@ -53,7 +53,8 @@ export interface ScanOutcome {
   deleted: number;
 }
 
-function isImage(relPath: string): boolean {
+/** 扫描白名单判定（分享包导入复用同一口径） */
+export function isImage(relPath: string): boolean {
   const dot = relPath.lastIndexOf(".");
   if (dot < 0) return false;
   return IMAGE_EXTENSIONS.has(relPath.slice(dot + 1).toLowerCase());
@@ -187,9 +188,11 @@ export async function startScan(
 
     if (done % 50 === 0) {
       await yieldToUI();
+      if (currentGeneration() !== gen) return { status: "cancelled", enumerated: done, deleted: 0 };
       while (callbacks.isPaused()) {
         callbacks.onProgress(toProgress(0, done, stamps, true));
         await sleep(500);
+        if (currentGeneration() !== gen) return { status: "cancelled", enumerated: done, deleted: 0 };
       }
     }
     // 250ms 时间闸（进度真实化：慢扫/快扫都保持反馈节奏，速度不再被条数截断）
@@ -199,6 +202,8 @@ export async function startScan(
       lastReport = now;
     }
   }
+
+  if (currentGeneration() !== gen) return { status: "cancelled", enumerated: done, deleted: 0 };
 
   // 防误删护栏（M3.2.3）：本次枚举到 0 个文件但缓存非空 → 疑似目录枚举
   // 异常/权限抖动（云盘/权限瞬态），跳过整个消失删除，避免索引被整库误删

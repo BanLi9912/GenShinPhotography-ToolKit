@@ -49,6 +49,12 @@
   color: var(--text-2);
 }
 
+/* 次要提示（如可拖入分享包）：比 hint 小一号、更浅，不和主说明抢视线 */
+.lib-empty__aside {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
 .lib-empty__btn {
   padding: var(--space-2) var(--space-4);
   border: 1px solid var(--line);
@@ -1316,6 +1322,61 @@
   font-size: var(--text-sm);
   color: var(--text-1);
   word-break: break-all;
+}
+
+/* 来源网址行：单行只读框 + 末端「新标签页打开」按钮（长网址框内横向滚动，不折行占高度） */
+.lib-detail__basic-row--url {
+  align-items: center;
+}
+
+.lib-detail__url {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-glass-soft);
+  transition: border-color var(--motion-fast);
+}
+
+.lib-detail__url:focus-within {
+  border-color: var(--accent);
+}
+
+.lib-detail__url-field {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  outline: none;
+}
+
+.lib-detail__url-open {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  border-left: 1px solid var(--line);
+  color: var(--text-2);
+  transition: color var(--motion-fast);
+}
+
+.lib-detail__url-open:hover {
+  color: var(--accent);
+}
+
+.lib-detail__url-open:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
 }
 
 .lib-detail__similar {
@@ -3861,4 +3922,56 @@
   flex: none;
   font-size: var(--text-xs);
   color: var(--text-3);
+}
+
+/* ---- 分享包拖入遮罩（SharePackageDrop，portal 到 body） ----
+   z-index 90：高于设置中心(80)，低于 toast(100) 与确认框(200)——松手后的提示与确认要盖在它上面。
+   pointer-events: none：遮罩不吃拖拽事件，进出计数只看 window，不会因遮罩出现而闪烁。 */
+.lib-sharedrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: var(--accent-weak);
+  pointer-events: none;
+  animation: lib-sharedrop-in var(--motion-fast);
+}
+
+.lib-sharedrop__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 420px;
+  padding: var(--space-8) var(--space-10);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-xl);
+  background: var(--bg-elevated);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-float);
+  text-align: center;
+}
+
+.lib-sharedrop__title {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  color: var(--text-title);
+}
+
+.lib-sharedrop__hint {
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+
+@keyframes lib-sharedrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }

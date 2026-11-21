@@ -122,7 +122,16 @@ export async function touchLastOpened(libraryId: string): Promise<void> {
 export async function bindNewLibrary(): Promise<LibraryRegistryEntry | null> {
   const handle = await pickDirectory();
   if (!handle) return null;
+  return bindHandle(handle);
+}
 
+/**
+ * 绑定一个已拿到读写授权的目录句柄（目录选择器与分享包导入共用），对位规则见
+ * bindNewLibrary。
+ */
+export async function bindHandle(
+  handle: FileSystemDirectoryHandle,
+): Promise<LibraryRegistryEntry> {
   const meta = await readJsonFile<LibraryMeta>(handle, ".ystk/meta.json");
   const existingId =
     meta && typeof meta.libraryId === "string" ? meta.libraryId : null;
@@ -139,6 +148,17 @@ export async function bindNewLibrary(): Promise<LibraryRegistryEntry | null> {
       throw new Error(
         `这个目录里有一次未完成的图库拆分（${marker.count ?? 0} 张，目录「${marker.targetPath ?? "?"}」）。` +
           "请回到原图库再点一次「拆分为独立图库…」把它写完，不要在这里绑定（否则会生成空索引覆盖它）。",
+      );
+    }
+    // 分享包导入半成品：同理不能初始化空索引。导入目录是当次新建的，删掉重新拖入即可。
+    const importMarker = await readJsonFile<{ source?: string; count?: number }>(
+      handle,
+      ".ystk/.import-in-progress.json",
+    );
+    if (importMarker) {
+      throw new Error(
+        `这个目录是一次未完成的分享包导入（${importMarker.source ?? "分享包"}，${importMarker.count ?? 0} 张）。` +
+          "请删除这个文件夹，再把分享包重新拖进图库页导入。",
       );
     }
   }
