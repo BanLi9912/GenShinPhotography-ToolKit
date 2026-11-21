@@ -33,6 +33,7 @@ import { LibraryQuickList } from "./LibraryQuickList";
 import { OverviewGrid } from "./OverviewGrid";
 import { SearchBar } from "./SearchBar";
 import { SettingsPanel } from "./SettingsPanel";
+import { SharePackageDrop } from "./SharePackageDrop";
 import { VisionWidget } from "./VisionWidget";
 import "./LibraryPage.css";
 
@@ -209,7 +210,17 @@ function FolderIcon() {
   );
 }
 
+/** 图库页：各状态页 + 分享包拖入区（拖入区挂在所有状态之外，未绑定时也能拖） */
 export function LibraryPage() {
+  return (
+    <>
+      <LibraryPageBody />
+      <SharePackageDrop />
+    </>
+  );
+}
+
+function LibraryPageBody() {
   const phase = useLibraryStore((s) => s.phase);
   const libraries = useLibraryStore((s) => s.libraries);
   const current = useLibraryStore((s) => s.current);
@@ -1054,6 +1065,7 @@ export function LibraryPage() {
             >
               绑定本地文件夹
             </button>
+            <p className="lib-empty__aside">也可拖入 .zip 或 .eaglepack 导入</p>
             <LibraryQuickList
               onRemove={(lib) => {
                 void confirmDialog({

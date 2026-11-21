@@ -119,6 +119,14 @@ export async function runAnalysisQueue(
   callbacks: AnalysisCallbacks,
 ): Promise<{ failed: number }> {
   const gen = currentGeneration();
+  /**
+   * 只在图库没换过时写回索引（代次一致）。解码 / 编码缩略图是异步的，这期间可能已经切到
+   * 另一个图库；两个图库有相同相对路径时条目 ID 也相同，不复核就会把旧图库的结果写到
+   * 新图库的条目上。切库后丢弃的结果无害：旧库下次打开时会重新分析这一张。
+   */
+  const writeBack = (id: string, patch: Parameters<typeof updateItem>[1]): void => {
+    if (currentGeneration() === gen) updateItem(id, patch);
+  };
 
   const passA = listItems()
     .filter(
@@ -208,7 +216,7 @@ export async function runAnalysisQueue(
         try {
           const thumb = await makeThumb(dir, bitmap, item.id);
           if (!thumb) throw new Error("thumb encode failed");
-          updateItem(item.id, {
+          writeBack(item.id, {
             thumb,
             width: dims ? dims.width : bitmap.width,
             height: dims ? dims.height : bitmap.height,
@@ -219,7 +227,7 @@ export async function runAnalysisQueue(
         }
       } catch (err) {
         console.warn("[library] Pass A 分析失败，跳过", item.relPath, err);
-        updateItem(item.id, { pipelineVersion: -1 });
+        writeBack(item.id, { pipelineVersion: -1 });
         failed += 1;
       }
       done += 1;
@@ -284,13 +292,13 @@ export async function runAnalysisQueue(
           const patch = analyzeImage(bitmap);
           // width/height 由 Pass A 写入原图尺寸，统计 patch 不得覆盖
           const { width: _w, height: _h, ...statsPatch } = patch;
-          updateItem(item.id, statsPatch);
+          writeBack(item.id, statsPatch);
         } finally {
           bitmap.close();
         }
       } catch (err) {
         console.warn("[library] Pass B 分析失败，跳过", item.relPath, err);
-        updateItem(item.id, { pipelineVersion: -1 });
+        writeBack(item.id, { pipelineVersion: -1 });
         failed += 1;
       }
       done += 1;

@@ -53,7 +53,8 @@ export interface ScanOutcome {
   deleted: number;
 }
 
-function isImage(relPath: string): boolean {
+/** 扫描白名单判定（分享包导入复用同一口径） */
+export function isImage(relPath: string): boolean {
   const dot = relPath.lastIndexOf(".");
   if (dot < 0) return false;
   return IMAGE_EXTENSIONS.has(relPath.slice(dot + 1).toLowerCase());

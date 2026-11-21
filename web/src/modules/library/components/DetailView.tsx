@@ -12,7 +12,7 @@ import { lumaHistogram, satHistogram } from "../../../core/imaging/histogram";
 import { decodeImage, sampleImageData } from "../../../core/imaging/sample";
 import { readFileBlob } from "../../../core/storage/fsa";
 import { getEntry } from "../index/binding";
-import { getSettings } from "../index/indexFile";
+import { getSettings, SOURCE_URL_EXTRA_KEY } from "../index/indexFile";
 import type { LibraryIndexItem } from "../index/indexFile";
 import { findSimilar } from "../search/similar";
 import { isGifPath, ROTATE_GIF_REJECT, spinBitmap } from "../rotate";
@@ -47,6 +47,16 @@ const FIELD_LABELS: Record<string, string> = {
   mood_style: "情绪风格",
   content_type: "内容类型",
 };
+
+/** 来源网址：只认 http(s)（javascript:/file: 等一律不给打开按钮，按普通文字显示） */
+function httpUrlOf(text: string): string | undefined {
+  try {
+    const url = new URL(text.trim());
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** 字段值格式化：字符串原样；top-k 数组 → "term 0.90 · term 0.07"；字符串数组 → " · " 连接 */
 function formatFieldValue(v: unknown): string {
@@ -1636,7 +1646,8 @@ export function DetailView({
   /** 基本信息行：内置语义字段（§7.1 表序）+ 自定义字段（extra，label 取 fieldConfig） */
   const basicRows = useMemo(() => {
     if (!item) return [];
-    const rows: Array<{ label: string; value: string }> = [];
+    /** url：来源网址行（http(s) 才给），渲染成单行只读框 + 打开按钮 */
+    const rows: Array<{ label: string; value: string; url?: string }> = [];
     for (const [key, label] of Object.entries(FIELD_LABELS)) {
       const text = formatFieldValue(item.fields[key]);
       if (text) rows.push({ label, value: text });
@@ -1648,7 +1659,9 @@ export function DetailView({
     const customLabels = new Map(custom.map((c) => [c.key, c.label]));
     for (const [key, v] of Object.entries(item.extra)) {
       const text = formatFieldValue(v);
-      if (text) rows.push({ label: customLabels.get(key) ?? key, value: text });
+      if (!text) continue;
+      const url = key === SOURCE_URL_EXTRA_KEY ? httpUrlOf(text) : undefined;
+      rows.push({ label: customLabels.get(key) ?? key, value: text, url });
     }
     return rows;
   }, [item]);
@@ -2216,12 +2229,56 @@ export function DetailView({
           <CardSlot label="基本信息" delay={75} ready skeletonHeight={140}>
             {basicRows.length > 0 ? (
               <div className="lib-detail__basic">
-                {basicRows.map((r) => (
-                  <div key={r.label} className="lib-detail__basic-row">
-                    <span className="lib-detail__basic-label">{r.label}</span>
-                    <span className="lib-detail__basic-value">{r.value}</span>
-                  </div>
-                ))}
+                {basicRows.map((r) =>
+                  r.url ? (
+                    <div key={r.label} className="lib-detail__basic-row lib-detail__basic-row--url">
+                      <span className="lib-detail__basic-label">{r.label}</span>
+                      <span className="lib-detail__url">
+                        <input
+                          className="lib-detail__url-field"
+                          type="text"
+                          readOnly
+                          value={r.value}
+                          title={r.value}
+                          aria-label={r.label}
+                          onFocus={(e) => e.currentTarget.select()}
+                          // ←/→ 留给框内移动光标，不冒泡到详情页的切图快捷键
+                          onKeyDown={(e) => {
+                            if (e.key === "ArrowLeft" || e.key === "ArrowRight") e.stopPropagation();
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="lib-detail__url-open"
+                          title="在新标签页打开"
+                          aria-label={`在新标签页打开${r.label}`}
+                          onClick={() => window.open(r.url, "_blank", "noopener,noreferrer")}
+                        >
+                          <svg
+                            width="13"
+                            height="13"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M14 4h6v6" />
+                            <path d="M20 4 10 14" />
+                            <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+                          </svg>
+                        </button>
+                      </span>
+                    </div>
+                  ) : (
+                    <div key={r.label} className="lib-detail__basic-row">
+                      <span className="lib-detail__basic-label">{r.label}</span>
+                      <span className="lib-detail__basic-value">{r.value}</span>
+                    </div>
+                  ),
+                )}
               </div>
             ) : (
               <p className="lib-detail__muted">尚无识图信息</p>
