@@ -1,0 +1,201 @@
+/* 超分结果小窗：原图/结果滑块对比 + 框内缩放/拖拽，全部走 design tokens */
+
+.superres-viewer {
+  display: flex;
+  flex-direction: column;
+  /* 显示面积优先：画框高度吃掉整个内容视口（扣顶栏/状态栏与一点呼吸位），
+     不再用 72vh 的小窗口径；窄高比窗口下由 520px 兜底 */
+  height: clamp(
+    520px,
+    calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--space-10)),
+    2000px
+  );
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass-soft);
+  transition: border-color var(--motion-fast);
+}
+
+.superres-viewer__stage {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.superres-viewer__stage.is-panning {
+  cursor: grabbing;
+}
+
+.superres-viewer__stage.is-split-dragging {
+  cursor: ew-resize;
+}
+
+/* 左半（原图）层：整层盖住画框，按分割线裁切；层内图片与结果同位移同缩放 */
+.superres-viewer__layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  transition: clip-path var(--motion-fast);
+}
+
+.superres-viewer__img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: auto;
+  max-height: none;
+  max-width: none;
+  object-fit: none;
+  background: none;
+  border: none;
+  border-radius: 0;
+  transform-origin: 0 0;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* 拖拽分割线时即时跟随，不做过渡（design.md §7.8：拖拽期间禁用过渡） */
+.superres-viewer__stage.is-split-dragging .superres-viewer__layer,
+.superres-viewer__stage.is-split-dragging .superres-viewer__handle {
+  transition: none;
+}
+
+/* 两侧角标：窄到快贴上分割线时淡出 */
+.superres-viewer__tag {
+  position: absolute;
+  top: var(--space-2);
+  padding: 1px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  letter-spacing: 0.04em;
+  color: var(--text-1);
+  pointer-events: none;
+  transition: opacity var(--motion-fast);
+}
+
+.superres-viewer__tag--before {
+  left: var(--space-2);
+}
+
+.superres-viewer__tag--after {
+  right: var(--space-2);
+}
+
+.superres-viewer__tag.is-hidden {
+  opacity: 0;
+}
+
+/* 分割线把手：28px 命中区（≥24px 点击目标），线走 accent 点睛色 */
+.superres-viewer__handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  margin-left: -14px;
+  display: grid;
+  place-items: center;
+  cursor: ew-resize;
+  touch-action: none;
+  transition: left var(--motion-fast);
+}
+
+.superres-viewer__handle-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+}
+
+.superres-viewer__handle-grip {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-float);
+  transition:
+    transform var(--motion-fast),
+    box-shadow var(--motion-fast);
+}
+
+.superres-viewer__handle:hover .superres-viewer__handle-grip,
+.superres-viewer__handle:focus-visible .superres-viewer__handle-grip {
+  transform: scale(1.08);
+}
+
+/* 键盘焦点环落在把手上（不用 outline:none 裸奔） */
+.superres-viewer__handle:focus-visible {
+  outline: none;
+}
+
+.superres-viewer__handle:focus-visible .superres-viewer__handle-grip {
+  box-shadow:
+    0 0 0 2px var(--bg-elevated),
+    0 0 0 4px var(--accent),
+    var(--shadow-float);
+}
+
+.superres-viewer__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-panel);
+  border-top: 1px solid var(--line);
+  transition:
+    background-color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.superres-viewer__meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.superres-viewer__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.superres-viewer__ctrl {
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.superres-viewer__ctrl:hover {
+  color: var(--text-1);
+  background: var(--accent-weak);
+}
+
+.superres-viewer__ctrl--text {
+  font-family: var(--font-mono);
+}

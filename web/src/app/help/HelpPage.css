@@ -1,0 +1,358 @@
+/* ============================================================
+   使用说明页（HelpPage）—— 独立页面，不套应用壳。
+   由设置中心「关于」页的模块行在新标签页打开（/help/:moduleId）。
+   自成滚动容器（#root 已 height:100%），顶栏 sticky。全部走 tokens，零硬编码色值。
+   ============================================================ */
+
+.help-page {
+  height: 100%;
+  overflow-y: auto;
+  background: var(--bg-app);
+  scroll-behavior: smooth;
+  /* 锚点跳转给 sticky 顶栏留出让位，否则标题会被压在栏下 */
+  scroll-padding-top: calc(var(--topbar-h) + var(--space-4));
+}
+
+/* ---- 顶栏（sticky，玻璃） ---- */
+.help-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--line);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* ---- 顶栏：模块切换标签条（2026-09-15 用户口径：整行换成模块名，点击切换说明书） ---- */
+.help-top__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 1080px;
+  height: var(--topbar-h);
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+  /* 五个模块名在窄屏放不下时横向滚动，不换行、不挤压 */
+  overflow-x: auto;
+}
+
+.help-tab {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  white-space: nowrap;
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.help-tab:hover {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+/* 当前所在的说明书：与目录项 hover 态同一套观感，靠字重 + 底色区分 */
+.help-tab.is-active {
+  background: var(--accent-weak);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.help-link {
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  transition: color var(--motion-fast);
+}
+
+.help-link:hover {
+  color: var(--accent);
+}
+
+/* ---- 正文容器 ---- */
+.help-body {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-6) var(--space-10);
+}
+
+.help-head {
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--line);
+}
+
+.help-head__code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--accent);
+}
+
+.help-head__title {
+  margin: var(--space-1) 0 var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  color: var(--text-1);
+}
+
+.help-head__tag {
+  font-size: var(--text-md);
+  color: var(--text-2);
+}
+
+.help-intro {
+  margin: var(--space-6) 0;
+  font-size: var(--text-md);
+  color: var(--text-1);
+}
+
+.help-intro p + p {
+  margin-top: var(--space-3);
+}
+
+/* ---- 两列：目录（sticky）+ 正文 ---- */
+.help-cols {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: var(--space-8);
+  align-items: start;
+}
+
+.help-toc {
+  position: sticky;
+  top: calc(var(--topbar-h) + var(--space-5));
+}
+
+.help-toc__title {
+  margin-bottom: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+}
+
+.help-toc ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.help-toc a {
+  display: block;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.help-toc a:hover {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+/* ---- 正文排版 ---- */
+.help-article {
+  min-width: 0;
+}
+
+.help-sec + .help-sec {
+  margin-top: var(--space-10);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--line);
+}
+
+.help-sec h2 {
+  margin-bottom: var(--space-4);
+  font-size: var(--text-xl);
+  color: var(--text-1);
+}
+
+.help-sec h3 {
+  margin: var(--space-6) 0 var(--space-2);
+  font-size: var(--text-lg);
+  color: var(--text-1);
+}
+
+.help-sec p {
+  font-size: var(--text-md);
+  color: var(--text-2);
+  line-height: 1.75;
+}
+
+.help-sec p + p {
+  margin-top: var(--space-3);
+}
+
+.help-sec ul,
+.help-sec ol {
+  margin: var(--space-3) 0 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.help-sec li {
+  font-size: var(--text-md);
+  color: var(--text-2);
+  line-height: 1.75;
+}
+
+.help-sec li::marker {
+  color: var(--text-3);
+}
+
+.help-sec strong {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.help-sec code,
+.help-intro code {
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--accent-weak);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--text-1);
+}
+
+.help-sec kbd,
+.help-intro kbd {
+  padding: 1px var(--space-1);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-glass-soft);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-1);
+}
+
+/* ---- 配图（Figure）---- */
+.hp-fig {
+  margin: var(--space-4) 0;
+}
+
+.hp-fig__box {
+  position: relative;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* 图就位：撤掉虚线框，交给图片自身的边 */
+.hp-fig__box.is-ok {
+  border-style: solid;
+}
+
+/* 探测期：absolute + opacity 0 —— 不参与布局、不闪破图，但**仍有盒子**（关键：
+   display:none 会让浏览器跳过加载，onLoad/onError 永不触发，探测就白做了） */
+.hp-fig__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.hp-fig__box.is-ok .hp-fig__img {
+  position: static;
+  width: 100%;
+  height: auto;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.hp-fig__slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  aspect-ratio: 16 / 9;
+  padding: var(--space-5);
+  text-align: center;
+  background: var(--bg-panel);
+}
+
+.hp-fig__slot-tag {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.hp-fig__slot-file {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--accent);
+}
+
+.hp-fig__slot-brief {
+  max-width: 42em;
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  line-height: 1.7;
+}
+
+.hp-fig__cap {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.hp-fig__num {
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+
+/* ---- 空/缺省态 ---- */
+.help-empty,
+.help-missing {
+  margin-top: var(--space-6);
+  font-size: var(--text-md);
+  color: var(--text-2);
+}
+
+.help-missing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-6);
+}
+
+/* ---- 窄屏：目录收成顶部一段，不再吸顶双列 ---- */
+@media (max-width: 900px) {
+  .help-cols {
+    grid-template-columns: 1fr;
+    gap: var(--space-6);
+  }
+
+  .help-toc {
+    position: static;
+  }
+
+  .help-body {
+    padding: var(--space-5) var(--space-4) var(--space-8);
+  }
+
+  .help-top__inner {
+    padding: 0 var(--space-4);
+  }
+}

@@ -1,0 +1,304 @@
+/* M1 无限画布：Stage 铺满内容区，溢出裁剪 */
+
+.canvas-page {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-app);
+  user-select: none;
+  transition: background-color var(--motion-base);
+}
+
+/* 工具/平移光标：Konva 会在外层容器写内联 cursor，
+   故把规则下放到内层 .konvajs-content 并以 !important 保证生效。
+   平移态优先级高于文本工具态（后写者胜）。 */
+.canvas-page--tool-text .konvajs-content {
+  cursor: text !important;
+}
+
+.canvas-page--pan-ready .konvajs-content {
+  cursor: grab !important;
+}
+
+.canvas-page--panning .konvajs-content {
+  cursor: grabbing !important;
+}
+
+/* 连接线点选模式 */
+.canvas-page--connecting .konvajs-content {
+  cursor: crosshair !important;
+}
+
+/* ---- 文本编辑覆盖层（任务 1.2）：样式与 Konva 文本节点逐项对齐 ---- */
+
+.canvas-editor {
+  position: absolute;
+  z-index: 10;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: 1px solid var(--accent);
+  background: transparent;
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  line-height: 1.4; /* 与 TextNode 的 TEXT_LINE_HEIGHT 一致 */
+  caret-color: var(--accent);
+  white-space: pre;
+  max-width: 85%;
+  max-height: 85%;
+  overflow: auto;
+  user-select: text; /* 覆盖 .canvas-page 的 none：编辑中必须能选字 */
+}
+
+.canvas-editor b {
+  font-weight: 700;
+}
+
+/* ---- 文本悬浮工具条（任务 1.2） ---- */
+
+.canvas-toolbar {
+  position: absolute;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* 字号：键盘输入框 + 预设弹层 */
+
+.canvas-toolbar__size-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.canvas-toolbar__size-input {
+  width: 38px;
+  padding: 2px var(--space-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.canvas-toolbar__size-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.canvas-toolbar__size-popover {
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+/* 上翻修饰：须压过 .canvas-toolbar__popover 的 top 锚定（后者在文件更后），故双类提权 */
+.canvas-toolbar__popover.canvas-toolbar__popover--up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+.canvas-toolbar__size-option {
+  padding: 2px 14px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: center;
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.canvas-toolbar__size-option:hover {
+  background: var(--accent-weak);
+  color: var(--text-1);
+}
+
+.canvas-toolbar__size-option.is-active {
+  color: var(--accent);
+}
+
+.canvas-toolbar__btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.canvas-toolbar__btn:hover {
+  background: var(--accent-weak);
+  color: var(--text-1);
+}
+
+.canvas-toolbar__btn.is-active {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.canvas-toolbar__divider {
+  width: 1px;
+  height: 16px;
+  background: var(--line);
+}
+
+/* 颜色：当前色块按钮 + 预设色板弹出层 */
+
+.canvas-toolbar__color-wrap {
+  position: relative;
+}
+
+.canvas-toolbar__swatch-preview {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+.canvas-toolbar__popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: max-content;
+  padding: var(--space-2);
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+.canvas-toolbar__swatches {
+  display: flex;
+  gap: 6px;
+}
+
+.canvas-toolbar__swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  transition: transform var(--motion-fast);
+}
+
+.canvas-toolbar__swatch:hover {
+  transform: scale(1.15);
+}
+
+.canvas-toolbar__swatch.is-active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.canvas-toolbar__auto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.canvas-toolbar__auto:hover {
+  background: var(--accent-weak);
+  color: var(--text-1);
+}
+
+/* ---- 自定义取色区（HSV 平面 + 色相滑条） ---- */
+
+.color-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 176px;
+  padding-top: 2px;
+  border-top: 1px solid var(--line);
+}
+
+.color-picker__plane {
+  position: relative;
+  height: 104px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.color-picker__plane-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 2px rgb(0 0 0 / 50%);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.color-picker__hue {
+  position: relative;
+  height: 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #f00 0%,
+    #ff0 17%,
+    #0f0 33%,
+    #0ff 50%,
+    #00f 67%,
+    #f0f 83%,
+    #f00 100%
+  );
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.color-picker__hue-handle {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 2px rgb(0 0 0 / 50%);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.color-picker__readout {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  user-select: none;
+}

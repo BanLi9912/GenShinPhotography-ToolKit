@@ -1,0 +1,2 @@
+# 批处理脚本必须保持 GBK 编码 + CRLF 换行（见 AGENTS.md §4），禁止 git 做换行符转换
+*.bat -text

@@ -1,0 +1,60 @@
+/* 轻提示 toast · 公共 UI（design.md §7.10 玻璃浮层进出场惯例）：
+   底部居中固定，浮于一切面板之上；玻璃材质 + 位移淡入/退场反向淡出。
+   底部基准随壳层状态栏有无微调（AppShell.css 负责），此处只认默认。 */
+.ystk-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--statusbar-h) + var(--space-5)); /* 壳层无状态栏时由 AppShell.css 贴底 */
+  transform: translateX(-50%);
+  z-index: 100; /* 高于库详情 40 / 识图小窗 60 等全部浮层 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  pointer-events: none; /* 提示不挡任何操作 */
+}
+
+.ystk-toast__item {
+  max-width: min(480px, calc(100vw - var(--space-8)));
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-float);
+  border: 1px solid var(--line);
+  color: var(--text-1);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: center;
+  overflow-wrap: anywhere; /* 超长标签名等无断点串不伸出提示条（同 confirm 口径） */
+  animation: ystk-toast-in var(--motion-base);
+  transition:
+    opacity var(--motion-base),
+    transform var(--motion-base);
+}
+
+/* 退场：向下 8px 反向淡出（与进场同速，--motion-base） */
+.ystk-toast__item.is-leaving {
+  opacity: 0;
+  transform: translateY(var(--space-2));
+}
+
+/* 进场：自下 8px 滑入 + 淡入 */
+@keyframes ystk-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--space-2));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ystk-toast__item {
+    animation: none;
+    transition: none;
+  }
+}

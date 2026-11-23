@@ -1,0 +1,124 @@
+/* 操作历史面板：侧边工具栏"历史"按钮弹出的悬浮小窗（灵动岛同族浮层） */
+
+.history-panel {
+  position: absolute;
+  left: 64px; /* 工具栏（left:12 + 宽约 44）外侧 8px 间距 */
+  top: 50%;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: 200px;
+  max-height: 320px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  opacity: 0;
+  transform: translate(-8px, -50%);
+  pointer-events: none;
+  user-select: none;
+  transition:
+    transform var(--motion-base),
+    opacity var(--motion-base),
+    background-color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.history-panel.is-open {
+  opacity: 1;
+  transform: translate(0, -50%);
+  pointer-events: auto;
+}
+
+.history-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-sm);
+  color: var(--text-1);
+  transition: border-color var(--motion-base);
+}
+
+.history-panel__close {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  line-height: 1;
+  color: var(--text-3);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.history-panel__close:hover {
+  color: var(--text-1);
+  background: var(--accent-weak);
+}
+
+.history-panel__list {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  overflow-y: auto;
+}
+
+.history-panel__empty {
+  padding: var(--space-4) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  text-align: center;
+}
+
+.history-panel__item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  text-align: left;
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.history-panel__item:hover {
+  color: var(--text-1);
+  background: var(--accent-weak);
+}
+
+/* 可重做操作（"当前状态"之后）：灰显，点击可重做跳转 */
+.history-panel__item--future {
+  opacity: 0.5;
+}
+
+.history-panel__time {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  color: var(--text-3);
+}
+
+.history-panel__current {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+
+.history-panel__current::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}

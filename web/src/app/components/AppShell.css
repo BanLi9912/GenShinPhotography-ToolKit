@@ -1,0 +1,55 @@
+.app-shell {
+  position: relative; /* 灵动岛工具栏（绝对定位浮层）的锚点 + 热区锚点 */
+  display: grid;
+  height: 100vh;
+  grid-template-rows: var(--topbar-h) 1fr var(--statusbar-h);
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "topbar"
+    "content"
+    "statusbar";
+}
+
+/* M3 图库：不渲染底部状态栏，内容区直接到底（2026-08-17 用户反馈） */
+.app-shell--no-statusbar {
+  grid-template-rows: var(--topbar-h) 1fr;
+  grid-template-areas:
+    "topbar"
+    "content";
+}
+
+.app-shell__content {
+  grid-area: content;
+  overflow: auto;
+  background: var(--bg-app);
+  transition: background-color var(--motion-base);
+}
+
+/* 左侧热区：鼠标靠近左边缘时弹出工具栏。width 56px 覆盖胶囊展开位置，
+   z-index 比工具岛低一层。
+   注意：它是浮在内容区之上的全高条，祖先链里没有滚动容器——落在它身上的滚轮
+   会被浏览器整口吃掉（左缘 56px 滚不动页），补偿见 AppShell.tsx 的 wheel 转交 */
+.app-shell__island-hot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 56px;
+  height: 100%;
+  z-index: 19;
+}
+
+/* 两个有岛工作区（/canvas ↔ /lab）直接切换时，进场岛延迟 180ms（= --motion-base
+   时长；tokens 动效是"时长+缓动"合并值，transition-delay 只能写时长）等退场岛
+   收完再滑入。delay 列表前两位对应 transform/opacity，后两位 background-color/
+   border-color 不延迟（主题切换不拖尾）；依赖两岛 transition 属性顺序一致 */
+.app-shell--island-relay .side-toolbar.is-visible,
+.app-shell--island-relay .lab-toolbar.is-visible {
+  transition-delay: 180ms, 180ms, 0ms, 0ms;
+}
+
+/* 全局轻提示（ui/toast，portal 到 body）：有状态栏时上移避开（statusbar 28 + 20 = 48px），
+   无状态栏（M3 图库）贴底 20px。toast 经 portal 挂 body，故用 body:has 感知壳结构；
+   壳层感知状态栏，toast.css 不认壳结构 */
+body:has(.app-shell--no-statusbar) .ystk-toast {
+  bottom: var(--space-5);
+}

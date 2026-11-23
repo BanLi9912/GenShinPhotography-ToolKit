@@ -1,0 +1,570 @@
+/* ============================================================
+   设置中心（SettingsCenter）—— 全屏玻璃覆盖层（编排对齐详情页 DetailView 先例）：
+   遮罩 color-mix + blur(20px) saturate(1.1)，portal 到 body + fixed 定位
+   （design.md §7.11 磨砂失效规避）。z 层级：详情 40 / 识图 60 / 设置中心 80 /
+   toast 100 / confirm 200。全部走 tokens，零硬编码色值。
+   ============================================================ */
+
+.sc-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 进入：挂载后双 rAF 加 .is-entered 触发遮罩 blur 渐变（同详情页 300ms decelerate） */
+  background-color: transparent;
+  -webkit-backdrop-filter: blur(0);
+  backdrop-filter: blur(0);
+  opacity: 1;
+  transition:
+    background-color 300ms cubic-bezier(0.2, 0, 0, 1),
+    -webkit-backdrop-filter 300ms cubic-bezier(0.2, 0, 0, 1),
+    backdrop-filter 300ms cubic-bezier(0.2, 0, 0, 1),
+    opacity var(--motion-base);
+}
+
+.sc-overlay.is-entered {
+  background-color: color-mix(in srgb, var(--bg-app) 68%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  backdrop-filter: blur(20px) saturate(1.1);
+}
+
+/* 退场：整体淡出（.is-leaving 200ms 后由组件卸载） */
+.sc-overlay.is-leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 内容壳：居中玻璃卡，四周留白（左右 ≥48px、上下 ≥40px），内部两列。
+   列间距维持 32px：右列自 2026-09-17 起左右各留 16px（见 .sc-content），
+   32 + 16 = 48px 的"导航分隔线 → 正文"间距与原实现（32 + 8 留白 + 8 负边距补偿）同宽，
+   视觉节奏不变；同时该留白足够容纳悬停行的 --shadow-float（横向约 16px）。 */
+.sc-shell {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-8);
+  overflow: hidden;
+  width: min(1180px, calc(100vw - 96px));
+  height: min(820px, calc(100vh - 80px));
+  padding: var(--space-8);
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* ---- 左列：分区导航 ---- */
+.sc-nav {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  padding-right: var(--space-4);
+}
+
+.sc-nav__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 34px;
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.sc-nav__item:hover {
+  color: var(--text-1);
+  background: var(--bg-glass-soft);
+}
+
+.sc-nav__item.is-active {
+  color: var(--accent);
+  background: var(--accent-weak);
+}
+
+/* 窄屏缩列时隐藏全名、显示 module code */
+.sc-nav__mini {
+  display: none;
+}
+
+/* 关于条目钉在列底 */
+.sc-nav__about {
+  margin-top: auto;
+}
+
+/* ---- 右列：分区内容（独立滚动，超高只滚右列） ----
+   左右留白 16px（--space-4）有两个用途：① 与左列导航的 padding-right 同宽，视觉留白对称；
+   ② 给内容里"悬停浮起"的行（.sc-about__module 的 --shadow-float）预留横向空间——
+   本列是滚动容器会裁剪溢出，外壳 .sc-shell 又是 overflow:hidden，留白不足时阴影两侧会被
+   设置面板边框切掉（2026-09-17 用户反馈修复）。
+   overflow-x 显式 hidden：本列只做纵向滚动，横向永不出滚动条（内容需在固定宽度内排布）。 */
+.sc-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-4);
+}
+
+.sc-content__title {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.sc-content__desc {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-3);
+}
+
+.sc-content__empty {
+  padding: var(--space-8) 0;
+  font-size: var(--text-sm);
+  color: var(--text-3);
+}
+
+/* 通用行（外观主题 / M1 吸附）：沿用 lib-settings 行式布局语义 */
+.sc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+}
+
+.sc-row__label {
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+
+.sc-row__hint {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+/* 分段控件（浅色/深色外观、复用感与库内 seg 一致） */
+.sc-seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-glass-soft);
+}
+
+.sc-seg button {
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.sc-seg button:hover {
+  color: var(--text-1);
+}
+
+.sc-seg button.is-active {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+/* 开关（吸附）：结构同库内 lib-filter__switch */
+.sc-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sc-switch__track {
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-glass-soft);
+  position: relative;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast),
+    border-color var(--motion-fast);
+}
+
+.sc-switch__track.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.sc-switch__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-1);
+  transition: transform var(--motion-fast);
+}
+
+.sc-switch__track.is-on .sc-switch__knob {
+  transform: translateX(14px);
+  background: var(--on-accent);
+}
+
+/* ---- 模块组件（通用分区 · ComponentsPanel）----
+   必需组只读展示 + 两条可选线真实安装：行式布局对齐 .sc-row 语义，
+   三态徽章与按钮全部走 token（--success/--danger/--text-3），双主题零硬编码色值。 */
+.sc-cmp {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.sc-cmp__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.sc-cmp__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.sc-cmp__notice {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass-soft);
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.sc-cmp__group-title {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+}
+
+.sc-cmp__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sc-cmp__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.sc-cmp__row:last-child {
+  border-bottom: none;
+}
+
+.sc-cmp__main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.sc-cmp__name {
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+
+.sc-cmp__detail {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+
+/* 三态徽章：ok = --success / bad = --danger / unknown = --text-3 */
+.sc-cmp__badge {
+  flex-shrink: 0;
+  padding: 0 var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  line-height: 18px;
+}
+
+.sc-cmp__badge.is-ok {
+  color: var(--success);
+}
+
+.sc-cmp__badge.is-bad {
+  color: var(--danger);
+}
+
+.sc-cmp__badge.is-unknown {
+  color: var(--text-3);
+}
+
+.sc-cmp__ops {
+  flex-shrink: 0;
+}
+
+.sc-cmp__btn {
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass-soft);
+  color: var(--text-1);
+  font-size: var(--text-xs);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast),
+    border-color var(--motion-fast);
+}
+
+.sc-cmp__btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.sc-cmp__btn:disabled {
+  color: var(--text-3);
+  cursor: default;
+  opacity: 0.7;
+}
+
+.sc-cmp__btn--ghost {
+  background: transparent;
+}
+
+.sc-cmp__paths {
+  margin: var(--space-3) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+
+/* ---- 关于页 ---- */
+.sc-about__name {
+  margin: 0 0 var(--space-1);
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  color: var(--text-1);
+}
+
+.sc-about__version {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-3);
+}
+
+.sc-about__pos {
+  margin: var(--space-3) 0 var(--space-5);
+  font-size: var(--text-md);
+  color: var(--text-2);
+}
+
+.sc-about__section-title {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+/* 模块行 = 使用说明入口（2026-09-11 用户需求）：整行可点、悬停浮起。
+   2026-09-17 布局修复：原实现用横向负外边距把行撑到列外（让文字与小标题左对齐），
+   结果行宽 878px 超出内容列 862px → 关于页出现横向拖动条。现改为行**不越出列**：
+   由 .sc-content 的 16px 左右留白同时承担"文字缩进"与"阴影空间"，行横跨列内容宽度
+   （悬停底色因此比小标题宽 16px，属可接受取舍），横向不再溢出。 */
+.sc-about__module {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  margin: 0 0 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  /* 浮起动效：位移 + 表面 + 阴影同帧走 --motion-fast（design.md §5 仅位移与透明度） */
+  transition:
+    transform var(--motion-fast),
+    background-color var(--motion-fast),
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast);
+}
+
+.sc-about__module:hover {
+  transform: translateY(-2px);
+  background: var(--bg-elevated);
+  border-color: var(--line);
+  box-shadow: var(--shadow-float);
+}
+
+/* 按下时落回原位，给一点"按到了"的反馈 */
+.sc-about__module:active {
+  transform: translateY(0);
+}
+
+.sc-about__module-code {
+  flex-shrink: 0;
+  width: 40px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+
+.sc-about__module-name {
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  color: var(--text-1);
+}
+
+.sc-about__module-tag {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.sc-about__module-badge {
+  flex-shrink: 0;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  color: var(--text-2);
+}
+
+/* 「打开使用说明」指示：平时隐藏，悬停随浮起一起浮现（兼作新标签页的提示） */
+.sc-about__module-go {
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  color: var(--text-3);
+  opacity: 0;
+  transition:
+    opacity var(--motion-fast),
+    color var(--motion-fast);
+}
+
+.sc-about__module:hover .sc-about__module-go,
+.sc-about__module:focus-visible .sc-about__module-go {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* ---- 窄屏：左列缩为 64px 窄列，只显示 module code 与「关于」 ---- */
+@media (max-width: 860px) {
+  .sc-nav {
+    width: 64px;
+    padding-right: var(--space-2);
+    gap: var(--space-2);
+  }
+
+  .sc-nav__item {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .sc-nav__full {
+    display: none;
+  }
+
+  .sc-nav__mini {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+  }
+}
+
+/* ---- 开发者日志（2026-09-24 通用分区底部）：开关行复用 sc-row/sc-switch，
+      面板复用 --line 分隔线体系，零硬编码色值 ---- */
+.sc-devlog {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.sc-devlog__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sc-devlog__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.sc-devlog__label {
+  flex: none;
+  color: var(--text-3);
+}
+
+.sc-devlog__value {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 面板行右侧操作区（图库索引备份的「立即备份」按钮用；日志行已无按钮） */
+.sc-devlog__ops {
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
+}
+
+/* ---- 开发者模式分区（2026-09-24）：标题复用 sc-cmp__head/sc-cmp__title，
+      内部各行自己不再画分隔线（分区只留头顶一条） ---- */
+.sc-devmode {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.sc-devmode > .sc-devlog {
+  margin-top: 0;
+  padding-top: var(--space-4);
+  border-top: none;
+}

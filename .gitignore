@@ -1,0 +1,29 @@
+# 依赖与构建产物
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# 本地便携 Node.js 运行时（不入库）
+.tools/
+
+# 日志
+logs/
+*.log
+devdata/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Claude Code 配置与技能（不入库）
+.claude/
+
+# Obsidian 文档库（任务卡/留痕/设计笔记，不入库）
+YuanSheToolKit_Obsidian/
+
+# 编辑器与操作系统
+.obsidian/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,173 @@
+/* 左侧工具栏（灵动岛式悬浮胶囊）：仅灵感画布显示，
+   切换模块时向左侧滑出隐藏（位移+透明度，§6.2 动效约束） */
+
+.side-toolbar {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  opacity: 0;
+  transform: translate(-140%, -50%);
+  pointer-events: none;
+  user-select: none;
+  transition:
+    transform var(--motion-base),
+    opacity var(--motion-base),
+    background-color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.side-toolbar.is-visible {
+  opacity: 1;
+  transform: translate(0, -50%);
+  pointer-events: auto;
+}
+
+.side-toolbar__btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--text-2);
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.side-toolbar__btn:hover:not(:disabled) {
+  color: var(--text-1);
+  background: var(--accent-weak);
+}
+
+.side-toolbar__btn.is-active {
+  color: var(--accent);
+  background: var(--accent-weak);
+}
+
+.side-toolbar__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* 破坏性动作（清空画布）：hover 用 --danger 点睛，与同排其它动作区分（口径同 ui/confirm 的 danger 确认钮） */
+.side-toolbar__btn--danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--accent-weak);
+}
+
+/* 工具区与动作区（历史）之间的分隔线 */
+.side-toolbar__divider {
+  width: 20px;
+  height: 1px;
+  margin: 2px auto;
+  background: var(--line);
+  transition: background-color var(--motion-base);
+}
+
+/* ---- 导出/导入悬浮菜单（2026-09-26）：悬停（或键盘聚焦/点击）展开，弹向按钮右侧 ----
+   口径对齐库内「送出」下拉（LibraryPage.css 的 .lib-detail__send-menu）：菜单常驻 DOM、
+   只切 opacity/位移/visibility，进出场同一组过渡（无卸载编排）；时长取 --motion-fast
+   而非浮层惯例 --motion-base——弹出式 hover 菜单要的是即时感。
+   展开态类 .is-open 由 SideToolbar 的 JS 态驱动（2026-09-26 用户反馈"太灵敏、很容易
+   收回去"：纯 CSS :hover 在光标横移过 8px 间隙/轻微抖出时立刻断开，菜单项点不中），
+   JS 侧留 EXPORT_CLOSE_DELAY_MS 宽限再收起。 */
+
+.side-toolbar__export {
+  position: relative;
+  display: flex;
+}
+
+.side-toolbar__export-menu {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 132px;
+  padding: var(--space-1);
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  /* 收起态：不可见 + 不可点。visibility 收尾（转 hidden 时在过渡末尾才翻转），
+     故收起动画能完整播完，而 hidden 又天然把它移出 Tab 序 */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-6px);
+  transition:
+    opacity var(--motion-fast),
+    transform var(--motion-fast),
+    visibility var(--motion-fast);
+}
+
+/* 触发器与菜单之间 8px 间隙的"悬停桥"：光标横移到菜单途中不让悬停先断 */
+.side-toolbar__export-menu::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+}
+
+.side-toolbar__export.is-open .side-toolbar__export-menu {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+/* 展开期间触发器保持点亮（口径同 .side-toolbar__btn.is-active），点击/悬停都有"这里开着"的可见反馈 */
+.side-toolbar__export.is-open .side-toolbar__btn {
+  color: var(--accent);
+  background: var(--accent-weak);
+}
+
+.side-toolbar__export-menu button {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-1);
+  font-size: var(--text-xs);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast);
+}
+
+.side-toolbar__export-menu button:hover {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+/* 按下即时反馈（点击那一刻就有变化，不等下载/文件对话框） */
+.side-toolbar__export-menu button:active {
+  background: var(--accent-weak);
+  color: var(--accent);
+  transform: scale(0.98);
+}
+
+/* 工程文件导入用的隐藏文件选择器 */
+.side-toolbar__file-input {
+  display: none;
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YuanShe ToolKit · 游戏摄影工具箱</title>
+    <script>
+      // 防主题闪烁：渲染前读回持久化主题（键名与 src/app/theme.ts 一致）
+      try {
+        var savedTheme = JSON.parse(localStorage.getItem("ystk-theme") || "null");
+        if (
+          savedTheme &&
+          savedTheme.state &&
+          (savedTheme.state.theme === "light" ||
+            savedTheme.state.theme === "dark")
+        ) {
+          document.documentElement.dataset.theme = savedTheme.state.theme;
+        }
+      } catch (e) {
+        // 读取失败时回退默认浅色
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
