@@ -104,6 +104,15 @@ export interface LibraryIndexItem {
   thumb: string | null;
 }
 
+/**
+ * 图片来源网址的存放约定：`extra[SOURCE_URL_EXTRA_KEY]`（字符串，http(s) 网址）。
+ * schema 里没有专门的来源字段；Eagle 导入（share/eaglePackage.ts）把 Eagle 的 url 写在这里，
+ * 详情页「基本信息」按自定义字段显示它，分享包导出/导入原样携带。键名与 PicLibBridge 一致。
+ * 采集扩展保存时已拿到网页地址（collector/types.ts 的 `SaveSourceInfo.pageUrl`），但采集
+ * 只落盘、不写索引，目前没有记录来源；以后要记录，写进这个键即可与导入的数据同口径。
+ */
+export const SOURCE_URL_EXTRA_KEY = "原帖链接";
+
 /** 建 meta 默认值（settings 默认值照抄规划：compression auto / presetId photography / fieldConfig {}） */
 export function createDefaultMeta(libraryId: string): LibraryMeta {
   const now = Date.now();
@@ -372,6 +381,11 @@ export function createItem(
 /** 当前活动图库代次（scan.ts 跨库守卫用） */
 export function currentGeneration(): number {
   return generation;
+}
+
+/** 目录句柄与已加载的索引匹配时，才允许重扫。 */
+export function isActiveDirectory(dir: FileSystemDirectoryHandle): boolean {
+  return activeDir === dir && indexMap !== null;
 }
 
 /**

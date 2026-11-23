@@ -6,8 +6,27 @@
  */
 
 import { create } from "zustand";
-import { ensurePermission, isFsaSupported } from "../../core/storage/fsa";
-import { toast } from "../../ui/toast";
+import {
+  ensurePermission,
+  isFsaSupported,
+  pickDirectory,
+  pickSaveFile,
+} from "../../core/storage/fsa";
+import { dismissToast, persistentToast, toast } from "../../ui/toast";
+import {
+  discardEmptyFile,
+  exportRootName,
+  exportSharePackage as writeSharePackage,
+} from "./share/exportPackage";
+import {
+  ImportFolderTakenError,
+  createImportFolder,
+  prepareImport,
+  removeImportFolder,
+  writeImport,
+  type ImportFolder,
+} from "./share/importPackage";
+import { SHARE_ZIP_SUFFIX, visionSummary } from "./share/sharePackage";
 import * as binding from "./index/binding";
 import * as indexFile from "./index/indexFile";
 import { startScan, type ScanOutcome, type ScanProgress } from "./index/scan";
@@ -376,6 +395,12 @@ function tagsChanged(prev: LibraryTag[], next: LibraryTag[]): boolean {
   return false;
 }
 
+/** 扫描完成后当前索引中的图片数，供图库内的导入流程确认目标与结果。 */
+export interface LibraryScanResult {
+  libraryId: string;
+  itemCount: number;
+}
+
 interface LibraryState {
   /** 注册表摘要（无 handle；itemCount 来自 meta.json stats.files） */
   libraries: LibrarySummary[];
@@ -435,6 +460,8 @@ interface LibraryState {
    * 用于「拆分为独立图库…」的防重复（写入期间按钮保持禁用）。
    */
   splittingTarget: string | null;
+  /** 分享包导出/导入进行中（同一时刻只允许一个；拖入区与导出按钮据此禁用） */
+  sharing: "export" | "import" | null;
   /** 跨图库搜索开关（PR-007：用户偏好，持久化于 localStorage，不在 CLEARED_SEARCH 内） */
   crossLibrary: boolean;
   /** 跨库结果内存态（PR-007：CrossResults 计算写入；不持久化、不进复位快照） */
@@ -462,16 +489,28 @@ interface LibraryState {
   /** 批量识图确认请求（BatchPanel 快照；确认/取消后置 null） */
   visionBatchRequest: VisionBatchRequest | null;
   init: () => Promise<void>;
-  bindNewLibrary: () => Promise<void>;
+  /** 从用户手势打开目录选择器，绑定并等待扫描。取消、失败或切库返回 null。 */
+  bindNewLibrary: () => Promise<LibraryScanResult | null>;
   authorizeCurrent: () => Promise<void>;
   switchTo: (libraryId: string) => Promise<void>;
   unbind: (libraryId: string) => Promise<void>;
-  rescan: () => Promise<void>;
+  /** 增量扫描。可指定预期的当前图库，目标不符、正在扫描或扫描失败时返回 null。 */
+  rescan: (expectedLibraryId?: string) => Promise<LibraryScanResult | null>;
   /**
    * 把一个已登记子目录连同后代生成独立图库索引（2026-11-18 任务卡 §4 B）。
    * 只写子目录的 .ystk（index.json + meta.json），不搬原图、不改父库、不切库。
    */
   splitFolderToLibrary: (targetPath: string) => Promise<void>;
+  /**
+   * 把一个目录（null = 整个图库）导出为分享包 ZIP：必须由点击直接调用（另存为对话框
+   * 需要用户手势）。包内不带缩略图与向量，私人备注清空。
+   */
+  exportSharePackage: (folderScope: string | null) => Promise<void>;
+  /**
+   * 拖入的分享包导入为新图库：读包核对 → 确认框（按钮点击打开目录选择器）→ 新建目录
+   * 解压 → 绑定并打开。失败时删掉本次新建的目录。
+   */
+  importSharePackage: (file: File) => Promise<void>;
   pauseScan: () => void;
   resumeScan: () => void;
   pauseAnalysis: () => void;
@@ -567,6 +606,58 @@ interface LibraryState {
 let initialized = false;
 
 /**
+ * 切走当前图库前让它停下来：后台基础分析（缩略图 / 统计）每处理一张就改一次索引，
+ * 只在两张之间检查暂停、要等代次变了才退出；而代次要等 deactivateLibrary 保存干净才变。
+ * 不先停下，保存永远追不上，切换会被「当前图库尚未保存成功」拒绝。
+ *
+ * 做法：暂停分析队列（处理完手上这一张就停），再反复落盘直到没有待保存的改动（最多约 10 秒）。
+ * 返回恢复函数：切换失败、原图库仍是当前库时调用，让它继续分析。
+ */
+async function quietCurrentLibrary(): Promise<() => void> {
+  const st = useLibraryStore.getState();
+  const libraryId = st.current?.libraryId;
+  const pausedByUs = st.analysis.running && !st.analysis.paused;
+  if (pausedByUs) useLibraryStore.setState({ analysis: { ...st.analysis, paused: true } });
+  for (let i = 0; i < 50; i += 1) {
+    await indexFile.flush();
+    if (!indexFile.hasPendingSave()) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return () => {
+    const now = useLibraryStore.getState();
+    if (pausedByUs && now.current?.libraryId === libraryId) {
+      useLibraryStore.setState({ analysis: { ...now.analysis, paused: false } });
+    }
+  };
+}
+
+/** 分享包导出/导入共用一条常驻进度提示 */
+const SHARE_TOAST = "library-share";
+
+/** 进度提示节流（250ms 一刷；首末两帧必刷） */
+function shareProgress(label: string): {
+  update: (done: number, total: number) => void;
+  done: () => void;
+} {
+  let last = 0;
+  return {
+    update: (done, total) => {
+      const now = Date.now();
+      if (done !== 0 && done !== total && now - last < 250) return;
+      last = now;
+      persistentToast(SHARE_TOAST, `${label} ${done} / ${total} 张…请勿关闭页面`);
+    },
+    done: () => dismissToast(SHARE_TOAST),
+  };
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/**
  * 识图运行封装（startVisionQueue / retryVisionFailed / 自动串联共用）：
  * 启动即复位上轮 errors/blockedReason 并置 running；进度全程落 store；
  * 守卫拦截时 blockedReason 写回 vision（UI 据其显示红字/小窗）。
@@ -639,41 +730,50 @@ async function launchVision(opts?: {
   }
 }
 
-/** 扫描尾部：等扫描结束（含收尾落盘）后刷新条目与计数，置 ready */
+/** 扫描完成后刷新条目与计数，置 ready。索引保存与基础分析在后台完成。 */
 async function finishScan(
   entry: LibraryRegistryEntry,
   opts?: {
     /** 打开新图库路径：识图总开关开启时不自动跑，改弹小窗确认（重扫不弹） */
     askVisionConfirm?: boolean;
   },
-): Promise<void> {
+): Promise<LibraryScanResult | null> {
+  const generation = indexFile.currentGeneration();
+  const isCurrentScan = () =>
+    indexFile.currentGeneration() === generation &&
+    useLibraryStore.getState().current?.libraryId === entry.libraryId;
+
   let outcome: ScanOutcome | null = null;
   try {
     outcome = await startScan(entry.handle, {
-      onProgress: (progress: ScanProgress) =>
-        useLibraryStore.setState({ scan: { ...progress, running: true } }),
-      isPaused: () => useLibraryStore.getState().scan.paused,
+      onProgress: (progress: ScanProgress) => {
+        if (isCurrentScan()) {
+          useLibraryStore.setState({ scan: { ...progress, running: true } });
+        }
+      },
+      isPaused: () => isCurrentScan() && useLibraryStore.getState().scan.paused,
     });
   } catch (err) {
     // 目录缺失/移动/断开：句柄可能仍持「授权」但 IO 全挂——置 missing 态，
     // 让用户「重新定位目录」（bindNewLibrary 按 meta.libraryId 对位）或移除绑定
     console.error("[library] 扫描失败（目录可能已不可访问）", err);
     const st = useLibraryStore.getState();
-    if (st.current?.libraryId !== entry.libraryId) return;
+    if (!isCurrentScan()) return null;
     useLibraryStore.setState({
       phase: "missing",
       scan: { ...st.scan, running: false },
     });
-    return;
+    return null;
   }
   const state = useLibraryStore.getState();
   // 扫描期间已切换/解绑图库则不再覆盖状态（indexFile 代次守卫已停扫）
-  if (state.current?.libraryId !== entry.libraryId) return;
+  if (!state.current || !isCurrentScan()) return null;
+  const result = { libraryId: entry.libraryId, itemCount: indexFile.getItemCount() };
   useLibraryStore.setState({
     items: indexFile.listItems(),
     current: {
       ...state.current,
-      itemCount: indexFile.getItemCount(),
+      itemCount: result.itemCount,
     },
     scan: { ...state.scan, running: false },
     analysis: { ...IDLE_ANALYSIS, running: true },
@@ -704,6 +804,7 @@ async function finishScan(
   let lastItemsRefresh = 0;
   void runAnalysisQueue(entry.handle, {
     onProgress: (progress: AnalysisProgress) => {
+      if (!isCurrentScan()) return;
       const patch: Partial<LibraryState> = {
         analysis: { ...progress, running: true },
       };
@@ -716,12 +817,12 @@ async function finishScan(
       }
       useLibraryStore.setState(patch);
     },
-    isPaused: () => useLibraryStore.getState().analysis.paused,
+    isPaused: () => isCurrentScan() && useLibraryStore.getState().analysis.paused,
   })
     .then(async ({ failed }) => {
       const st = useLibraryStore.getState();
       // 分析期间已切换/解绑图库则不再覆盖状态（indexFile 代次守卫已停队列）
-      if (st.current?.libraryId !== entry.libraryId) return;
+      if (!isCurrentScan()) return;
       useLibraryStore.setState({
         items: indexFile.listItems(),
         analysis: { ...st.analysis, running: false, failed },
@@ -733,6 +834,7 @@ async function finishScan(
       // （避免「173/173 还问确认」的空弹，也避免面板直接消失——2026-08-21 用户反馈）；
       // 总开关关闭时维持原静默串联（守卫拦截不弹窗）
       const global = await loadVisionGlobal();
+      if (!isCurrentScan()) return;
       if (opts?.askVisionConfirm) {
         if (global.enabled) {
           const all = indexFile.listItems();
@@ -813,11 +915,12 @@ async function finishScan(
     .catch((err) => {
       console.error("[library] 分析队列异常", err);
       const st = useLibraryStore.getState();
-      if (st.current?.libraryId !== entry.libraryId) return;
+      if (!isCurrentScan()) return;
       useLibraryStore.setState({
         analysis: { ...st.analysis, running: false },
       });
     });
+  return result;
 }
 
 /**
@@ -905,7 +1008,7 @@ async function runThumbGc(entry: LibraryRegistryEntry): Promise<void> {
 async function openEntry(
   entry: LibraryRegistryEntry,
   opts?: { askVisionConfirm?: boolean },
-): Promise<void> {
+): Promise<LibraryScanResult | null> {
   // 切库/打开前中止旧库识图并复位 vision 状态（双保险，代次守卫已兜）；
   // M3.5.3.4 中止原因逐字透传（小窗显示「已中止 · 切换或打开图库」）
   abortVisionRun("切换或打开图库");
@@ -949,12 +1052,9 @@ async function openEntry(
         pendingDetailId: null,
       });
     }
-    // 扫描转后台增量：不 await（finishScan 尾部会再置 ready/items/analysis，
-    // 幂等无害）；后台扫描不提供暂停，scan.paused 恒 false
-    void finishScan(entry, opts);
-    return;
   }
-  await finishScan(entry, opts);
+  // 缓存网格已显示，调用方仍可以等待增量扫描结果。
+  return finishScan(entry, opts);
 }
 
 /**
@@ -1000,6 +1100,7 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
   visionWidgetOpen: false,
   visionBatchRequest: null,
   splittingTarget: null,
+  sharing: null,
   sortKey: "mtime",
   sortDir: "desc",
   selectedIds: new Set<string>(),
@@ -1061,31 +1162,30 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
 
   /** 绑定新文件夹（按钮 = 用户手势入口） */
   bindNewLibrary: async () => {
+    const previousPhase = get().phase;
+    if (previousPhase === "binding" || previousPhase === "scanning") return null;
     set({ phase: "binding" });
     let entry: LibraryRegistryEntry | null = null;
     try {
       entry = await binding.bindNewLibrary();
       if (!entry) {
         // 用户取消：回到原有状态（missing 态保持——取消重新定位仍停留在错误提示页）
-        set((s) => ({
-          phase: s.phase === "missing" ? "missing" : s.current ? "ready" : "unbound",
-        }));
-        return;
+        if (get().phase === "binding") set({ phase: previousPhase });
+        return null;
       }
       set({ libraries: await binding.refreshSummaries() });
-      await openEntry(entry, { askVisionConfirm: true });
+      return await openEntry(entry, { askVisionConfirm: true });
     } catch (err) {
       // F1：openEntry 的索引读失败中止与绑定本身的异常同款处理——toast 提示 + 回原 phase；
       // 旧库同样已在 openEntry 内被 deactivate，故 best-effort 重新激活（同 switchTo）
       console.error("[library] 绑定失败", err);
       toast(err instanceof Error ? err.message : String(err));
-      set((s) => ({
-        phase: s.phase === "missing" ? "missing" : s.current ? "ready" : "unbound",
-      }));
+      if (get().phase === "binding") set({ phase: previousPhase });
       // 绑定本身失败（entry 尚未拿到）时无需重激活——此时还没人 deactivate 旧库
       if (entry && (await recoverActiveLibrary(entry)) === "failed") {
         toast("当前图库状态异常，请刷新页面");
       }
+      return null;
     }
   },
 
@@ -1202,17 +1302,19 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
   },
 
   /** 当前图库重新扫描（增量比对）：重扫后台化（M3.2.3），不再跳阻塞扫描页 */
-  rescan: async () => {
-    const entry = get().current
-      ? binding.getEntry(get().current!.libraryId)
-      : undefined;
-    if (!entry) return;
-    // 后台重扫：phase 保持 ready、网格不动；尾部 setState 幂等，与 openEntry
-    // 缓存路径同款注释口径（不 await）；后台扫描不提供暂停，scan.paused 恒 false。
+  rescan: async (expectedLibraryId) => {
+    const { current, phase, scan } = get();
+    if (!current || phase !== "ready" || scan.running) return null;
+    if (expectedLibraryId !== undefined && current.libraryId !== expectedLibraryId) {
+      return null;
+    }
+    const entry = binding.getEntry(current.libraryId);
+    if (!entry || !indexFile.isActiveDirectory(entry.handle)) return null;
+    // 后台重扫保持 ready 和现有网格，调用方可等待索引刷新。
     // 2026-10-24：扫描/分析读数已从工具栏迁到识图小窗，故任务启动时还原 visionDismissed
     // （口径同下方识图活动处）——否则用户先关掉小窗，重扫后就再也看不到任何进度
     set({ scan: { ...IDLE_SCAN, running: true }, visionDismissed: false });
-    void finishScan(entry);
+    return finishScan(entry);
   },
 
   /**
@@ -1311,6 +1413,210 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
       toast(err instanceof Error ? err.message : String(err));
     } finally {
       set({ splittingTarget: null });
+    }
+  },
+
+  exportSharePackage: async (folderScope) => {
+    const state = get();
+    const current = state.current;
+    if (!current || state.phase !== "ready") return;
+    if (state.sharing || state.splittingTarget) {
+      toast("请等当前的导入、导出或拆分完成");
+      return;
+    }
+    if (state.scan.running) {
+      toast("扫描完成后可导出");
+      return;
+    }
+    const entry = binding.getEntry(current.libraryId);
+    if (!entry) {
+      toast("找不到当前图库的目录句柄，请刷新页面后重试");
+      return;
+    }
+    // 另存为对话框必须紧跟这次点击（用户手势有时效），建议文件名先按内存条目算
+    let preview: { rootName: string; count: number };
+    try {
+      preview = exportRootName(indexFile.listItems(), folderScope, current.name);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (preview.count === 0) {
+      toast("这个范围里没有已登记的图片");
+      return;
+    }
+    let target: FileSystemFileHandle | null;
+    try {
+      target = await pickSaveFile({
+        suggestedName: preview.rootName + SHARE_ZIP_SUFFIX,
+        id: "ystk-share-export",
+        description: "YSTK 分享包",
+        mime: "application/zip",
+        extension: ".zip",
+      });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (!target) return;
+
+    set({ sharing: "export" });
+    const generationAtStart = indexFile.currentGeneration();
+    const progress = shareProgress("正在导出分享包");
+    try {
+      // 依据必须是已落盘且与内存一致的索引（同拆分口径）
+      const snapshot = await indexFile.readSavedIndex();
+      if (!snapshot.ok) {
+        await discardEmptyFile(target);
+        throw new Error(`导出已取消：${snapshot.reason}`);
+      }
+      const result = await writeSharePackage({
+        dir: entry.handle,
+        items: snapshot.items,
+        folderScope,
+        libraryName: current.name,
+        settings: indexFile.getSettings(),
+        target,
+        onProgress: progress.update,
+        isStale: () =>
+          indexFile.currentGeneration() !== generationAtStart ||
+          get().current?.libraryId !== current.libraryId,
+      });
+      progress.done();
+      const notes: string[] = [];
+      if (result.missing > 0) notes.push(`${result.missing} 张原图找不到，已跳过`);
+      if (result.skipped > 0) notes.push(`${result.skipped} 张文件名无法写入分享包，已跳过`);
+      toast(
+        `已导出 ${result.count} 张到「${target.name}」（${formatBytes(result.bytes)}）` +
+          (notes.length > 0 ? `；${notes.join("，")}` : ""),
+      );
+    } catch (err) {
+      progress.done();
+      console.error("[library] 导出分享包失败", err);
+      toast(err instanceof Error ? err.message : String(err));
+    } finally {
+      set({ sharing: null });
+    }
+  },
+
+  importSharePackage: async (file) => {
+    const state = get();
+    if (state.sharing || state.splittingTarget) {
+      toast("请等当前的导入、导出或拆分完成");
+      return;
+    }
+    if (
+      !["unbound", "ready", "missing", "need-permission"].includes(state.phase) ||
+      state.scan.running
+    ) {
+      toast("扫描完成后可导入分享包");
+      return;
+    }
+    set({ sharing: "import" });
+    try {
+      persistentToast(SHARE_TOAST, "正在读取分享包…");
+      let prepared: Awaited<ReturnType<typeof prepareImport>>;
+      try {
+        prepared = await prepareImport(file);
+      } finally {
+        dismissToast(SHARE_TOAST);
+      }
+      const { layout, plan } = prepared;
+      const todo = countVisionTodoOf(plan.items);
+      // 只说结果和需要留意的事：缩略图沿用、向量不导入这类内部处理不进文案（用户 2026-11-21 口径）
+      const lines = [
+        `${layout.images.length} 张图片，` +
+          visionSummary(todo.pending + plan.unindexed, todo.failed),
+        `将在你选择的位置新建文件夹「${layout.rootName}」，作为新图库打开。`,
+      ];
+      const skipped: string[] = [];
+      if (layout.unsupported > 0) {
+        const exts = layout.unsupportedExts.slice(0, 4).join("、");
+        skipped.push(`${layout.unsupported} 个不支持的格式` + (exts ? `（${exts}）` : ""));
+      }
+      if (plan.dropped > 0) skipped.push(`${plan.dropped} 条记录找不到原图`);
+      if (layout.ignored > 0) skipped.push(`${layout.ignored} 个非图片文件`);
+      if (skipped.length > 0) lines.push(`跳过：${skipped.join("、")}`);
+      const ok = await confirmDialog({
+        title: layout.format === "eagle"
+          ? `导入 Eagle 包「${layout.rootName}」`
+          : `导入「${layout.rootName}」`,
+        message: lines.join("\n"),
+        confirmText: "选择解压位置…",
+      });
+      if (!ok) return;
+      // 紧跟确认按钮的点击打开目录选择器（拖放本身不算用户手势）
+      const parent = await pickDirectory("ystk-share-import");
+      if (!parent) return;
+
+      let created: ImportFolder | null = null;
+      const progress = shareProgress("正在导入分享包");
+      // 目标目录被另一个导入同时占用时（极少见），删掉自己的暂存后换下一个名字重试一次
+      for (let attempt = 1; ; attempt += 1) {
+        created = null;
+        try {
+          created = await createImportFolder(parent, layout.rootName, {
+            source: file.name,
+            count: layout.images.length,
+          });
+          await writeImport({ prepared, folder: created, onProgress: progress.update });
+          progress.done();
+          break;
+        } catch (err) {
+          // 只删本次导入拥有的目录：凭证对不上时只删自己的暂存子目录，别人的文件一个都不动
+          const cleanup = created ? await removeImportFolder(parent, created) : "removed";
+          if (err instanceof ImportFolderTakenError && attempt < 2) {
+            console.warn("[library] 导入目录被另一个导入占用，换名重试", created?.name);
+            continue;
+          }
+          progress.done();
+          console.error("[library] 导入分享包失败", err);
+          const note =
+            cleanup === "failed" && created
+              ? `（未能自动删除「${created.name}」，请手动删除这个文件夹）`
+              : cleanup === "not-owned" && created && !(err instanceof ImportFolderTakenError)
+                ? `（「${created.name}」同时被另一个导入使用，没有删除其中的文件）`
+                : "";
+          toast((err instanceof Error ? err.message : String(err)) + note);
+          return;
+        }
+      }
+      if (!created) return;
+
+      // 写盘完成即是一个完整图库：之后的绑定/打开失败不删目录，用户可手动绑定它
+      const previousPhase = get().phase;
+      set({ phase: "binding" });
+      let entry: LibraryRegistryEntry | null = null;
+      // 当前图库可能还在后台生成缩略图（例如上一次导入的图库），先让它停下并保存干净
+      const resumeCurrent = await quietCurrentLibrary();
+      try {
+        entry = await binding.bindHandle(created.dir);
+        set({ libraries: await binding.refreshSummaries() });
+        const scanned = await openEntry(entry, { askVisionConfirm: true });
+        const after = scanned ? countVisionTodoOf(indexFile.listItems()) : null;
+        toast(
+          `已导入 ${layout.images.length} 张到新图库「${created.name}」` +
+            (after && (after.pending > 0 || after.failed > 0)
+              ? `，${visionSummary(after.pending, after.failed)}`
+              : ""),
+        );
+      } catch (err) {
+        console.error("[library] 导入后打开图库失败", err);
+        toast(
+          `分享包已解压到「${created.name}」，但打开失败：` +
+            (err instanceof Error ? err.message : String(err)),
+        );
+        if (get().phase === "binding") set({ phase: previousPhase });
+        resumeCurrent();
+        if (entry && (await recoverActiveLibrary(entry)) === "failed") {
+          toast("当前图库状态异常，请刷新页面");
+        }
+      }
+    } catch (err) {
+      console.error("[library] 导入分享包失败", err);
+      toast(err instanceof Error ? err.message : String(err));
+    } finally {
+      set({ sharing: null });
     }
   },
 

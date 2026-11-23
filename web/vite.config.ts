@@ -1239,4 +1239,9 @@ export default defineConfig({
     // onnxruntime-web 的“外部 WASM”加载器（配合 ort.env.wasm.wasmPaths 使用）
     conditions: ["onnxruntime-web-use-extern-wasm"],
   },
+  // 固定监听 IPv4 回环：默认的 "localhost" 在 Node 17+ 上优先解析成 ::1，只监听 IPv6。
+  // 部分 Windows 环境会拦截 IPv6 回环连接（EACCES），浏览器与 start-web.bat 都连不上。
+  // 浏览器打开 localhost:5173 时会回退到 127.0.0.1，采集扩展也认这两个地址。
+  server: { host: "127.0.0.1" },
+  preview: { host: "127.0.0.1" },
 });

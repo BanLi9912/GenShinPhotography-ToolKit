@@ -135,6 +135,8 @@ export function FolderDrawer() {
   const scanRunning = useLibraryStore((s) => s.scan.running);
   const splittingTarget = useLibraryStore((s) => s.splittingTarget);
   const splitFolderToLibrary = useLibraryStore((s) => s.splitFolderToLibrary);
+  const sharing = useLibraryStore((s) => s.sharing);
+  const exportSharePackage = useLibraryStore((s) => s.exportSharePackage);
   /** 别的浮层开着时不自动弹出（免得两层玻璃叠一起，或盖住设置 / 详情 / 批量确认） */
   const blocked = useLibraryStore(
     (s) =>
@@ -448,6 +450,42 @@ export function FolderDrawer() {
     void splitFolderToLibrary(target);
   };
 
+  /** 导出分享包：当前文件夹（「全部」= 整个图库）。另存为对话框要紧跟这次点击，
+   *  所以同步调 store（它在打开对话框之前不做任何 await） */
+  const exportDisabled =
+    items.length === 0 || scanRunning || sharing != null || splittingTarget != null;
+  const exportHint = scanRunning
+    ? "扫描完成后可导出"
+    : sharing === "export"
+      ? "正在导出分享包…"
+      : sharing === "import"
+        ? "正在导入分享包…"
+        : splittingTarget != null
+          ? "正在生成独立图库…"
+          : "";
+  const onExport = () => {
+    if (exportDisabled) return;
+    const target = folderScope;
+    close();
+    void exportSharePackage(target);
+  };
+  const exportButton = (
+    <button
+      type="button"
+      className="lib-folderdrawer__split"
+      disabled={exportDisabled}
+      title={
+        exportHint ||
+        (folderScope != null
+          ? `把「${folderScope}」及其子目录导出为分享包（不含缩略图和私人备注）`
+          : "把整个图库导出为分享包（不含缩略图和私人备注）")
+      }
+      onClick={onExport}
+    >
+      导出分享包…
+    </button>
+  );
+
   return (
     <>
       {/* 贴边抓手：左缘细条上的可见提示（悬停变亮、计时进度向上填充），
@@ -564,9 +602,13 @@ export function FolderDrawer() {
                     拆分为独立图库…
                   </button>
                 )}
+                {exportButton}
               </div>
             ) : (
-              <span className="lib-folderdrawer__hint">移开鼠标即收起</span>
+              <>
+                <div className="lib-folderdrawer__actions">{exportButton}</div>
+                <span className="lib-folderdrawer__hint">移开鼠标即收起</span>
+              </>
             )}
             {folderScope != null && splitAction.hint !== "" && (
               <p className="lib-folderdrawer__hint">{splitAction.hint}</p>
