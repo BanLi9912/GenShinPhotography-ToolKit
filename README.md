@@ -136,7 +136,6 @@ scripts/                 # 安装与启停脚本（Windows .bat，GBK 编码）
   install.bat            #   一键安装（环境探测 + 必需组件 + 两条可选线）
   start-web.bat          #   启动 dev server（默认 5173）
   stop-web.bat           #   停止 dev server
-  make-share-package.bat #   导出"只含源码"的分享包（zip）
 web/                     # 前端工程（React 18 + TypeScript + Vite）
   src/app/               #   应用壳、设置中心、使用说明
   src/core/              #   内核：存储(FSA/IndexedDB)、图像算法、诊断日志

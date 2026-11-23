@@ -1,8 +1,13 @@
 {
-  "name": "web",
+  "name": "yuanshe-toolkit",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.3.0",
   "type": "module",
+  "license": "MIT",
+  "description": "YuanShe ToolKit 原摄工具箱 · 本地优先的游戏摄影工具箱（灵感画布 / 参考图库 / 图像分析 / 图像超分）",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "predev": "node scripts/copy-superres-assets.mjs",
     "dev": "vite",
