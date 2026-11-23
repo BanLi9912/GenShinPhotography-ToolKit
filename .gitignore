@@ -30,3 +30,9 @@ RELEASE.md
 .idea/
 .DS_Store
 Thumbs.db
+
+# 内部协作约定与交接记录（2026-11-22 用户定：不入公开历史）
+AGENTS.md
+HANDOFF.md
+CLAUDE.md
+CODEX.md
